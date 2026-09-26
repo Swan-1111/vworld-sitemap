@@ -1,0 +1,4317 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>사이트 분석</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --txt:#e6e8ec;
+    --dim:#9aa3b2; --acc:#e0b088; --sel:#e2564a; --ok:#6fbf8b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{display:flex;font:14px/1.5 -apple-system,"Segoe UI","Malgun Gothic",sans-serif;
+       background:var(--bg);color:var(--txt)}
+
+  /* 패널이 길어지면 세로로 스크롤. 섹션이 눌려서 잘리지 않도록 flex-shrink를 막는다 */
+  /* 폭은 --side-w 하나로 정한다. 끌어서 바꾸면 이 값만 바뀐다. */
+  :root{--side-w:340px}
+  #side{width:var(--side-w);flex:0 0 var(--side-w);display:flex;flex-direction:column;
+        background:var(--panel);border-right:1px solid var(--line);
+        overflow-y:auto;overscroll-behavior:contain}
+
+  /* 사이드바 오른쪽 끝을 잡아 끄는 손잡이 */
+  #sidegrip{position:fixed;top:0;bottom:0;left:var(--side-w);width:7px;margin-left:-3px;
+            cursor:col-resize;z-index:1200;background:transparent}
+  #sidegrip::after{content:"";position:absolute;left:2px;top:0;bottom:0;width:2px;
+                   background:transparent;transition:background .12s}
+  #sidegrip:hover::after,#sidegrip.drag::after{background:var(--acc)}
+  body.resizing{cursor:col-resize;user-select:none}
+  body.resizing #map,body.resizing #diagram2d{pointer-events:none}
+  #side::-webkit-scrollbar{width:9px}
+  #side::-webkit-scrollbar-track{background:transparent}
+  #side::-webkit-scrollbar-thumb{background:#333947;border-radius:5px;
+        border:2px solid var(--panel)}
+  #side::-webkit-scrollbar-thumb:hover{background:#414958}
+  #map{flex:1;background:#0e1013}
+  #diagram{flex:1;background:#0e1013;position:relative;overflow:hidden}
+  #dgwebgl,#dgcanvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #dgwebgl{z-index:0;pointer-events:none}
+  #dgcanvas{z-index:1;cursor:grab;touch-action:none}
+  #dgcanvas:active{cursor:grabbing}
+  #vw3d-note{margin-top:7px;color:var(--dim);font-size:10px;line-height:1.45}
+  #vw3d-note[data-kind="error"]{color:#e6a08f}
+  .d3-render-mass .lyr-name{color:#d9dde5}
+  .d3-render-mass .lyr-range-note{grid-column:4 / 8;color:var(--dim);font-size:9px;
+                                  text-align:right;padding-right:3px;white-space:nowrap}
+  .d3-render-mass-sub{border-left-color:#7d695a}
+  .d3-render-mass-sub .d3-map-toggle{color:var(--txt)}
+  .d3-render-mass-sub .d3-map-toggle:has(input:disabled){opacity:.45}
+
+  /* 최상위 탭 — 사이트 분석 / 다이어그램 */
+  /* 탭도 붙박이. 제목줄 바로 밑에 서게 top 을 제목줄 높이에 맞춘다.
+     예전에는 52px 로 못 박아 두어, 제목이 두 줄이 되면 탭이 제목을 덮었다. */
+  .viewtabs{display:flex;position:sticky;top:var(--title-h,60px);z-index:5;
+            background:var(--panel);border-bottom:1px solid var(--line)}
+  .vtab{flex:1;padding:11px 8px;background:none;border:0;border-bottom:2px solid transparent;
+        color:var(--dim);font:600 13px/1 inherit;cursor:pointer}
+  .vtab:hover{color:var(--txt)}
+  .vtab.on{color:var(--txt);border-bottom-color:var(--sel)}
+  .viewpane{display:flex;flex-direction:column;flex:1 0 auto}
+  /* 다이어그램 안의 하위 탭 — 2D / 3D */
+  .subtabs{display:flex;gap:4px;padding:10px 18px 0}
+  .stab{flex:1;padding:7px 8px;background:#20242c;border:1px solid var(--line);
+        border-radius:4px;color:var(--dim);font:600 12px/1 inherit;cursor:pointer}
+  .stab:hover{color:var(--txt)}
+  .stab.on{background:var(--sel);border-color:var(--sel);color:#fff}
+  #diagram2d{flex:1;background:#fff;position:relative}
+  #p2canvas{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+  #p2canvas:active{cursor:grabbing}
+
+  /* 레이어 표 — 표시 · 이름 · 채우기 · 선 · 굵기 */
+  /* 손잡이·표시·이름 · 채우기·선·선종류·굵기·투명.
+     예전에는 뒤에 남는 칸(1fr)이 하나 더 있어 표가 패널 밖으로 밀려나고
+     「투명」 칸이 잘렸다. 이름 칸을 늘었다 줄었다 하게 두어 폭을 맞춘다. */
+  .lyr{display:grid;
+       grid-template-columns:13px 18px minmax(52px,1fr) 44px 49px 50px 40px 40px;
+       gap:4px;align-items:center;margin-bottom:3px;padding:1px 0;border-radius:3px}
+  /* 위성사진 행은 채우기부터 굵기까지의 자리를 한 칸으로 묶어 흑백·일반지도를 넣는다.
+     칸마다 하나씩 넣으면 좁아서 글자가 「흑…」처럼 잘린다. */
+  .lyr-opts{grid-column:4 / 8;display:flex;align-items:center;gap:12px;min-width:0}
+  .lyr[draggable]{cursor:default}
+  .lyr-grip{color:#4d5462;font-size:11px;cursor:grab;user-select:none;letter-spacing:-2px}
+  .lyr.dragging{opacity:.4}
+  .lyr.over{background:#2a3040;box-shadow:0 -2px 0 var(--sel) inset}
+  .lyr-head{color:var(--dim);font-size:10px;letter-spacing:.04em;margin-bottom:7px}
+  .lyr-head span:nth-child(n+4){text-align:center}
+  .lyr-name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lyr-fill{display:flex;align-items:center;gap:3px}
+  .lyr-stroke{display:flex;align-items:center;gap:3px;border-left:1px solid #343a45;
+              padding-left:4px;min-width:0}
+  .lyr-stroke input[type=color]{width:24px}
+  .lyr-color-only input[type=color]{width:28px}
+  .lyr input[type=color]{width:24px;height:22px;padding:0;border:1px solid var(--line);
+       border-radius:3px;background:none;cursor:pointer}
+  .color-palette-pop{position:fixed;z-index:10000;width:220px;padding:9px;box-sizing:border-box;
+       background:#181b21;border:1px solid #454b57;border-radius:6px;
+       box-shadow:0 10px 28px rgba(0,0,0,.38)}
+  .color-palette-pop[hidden]{display:none}
+  .color-palette-title{display:flex;align-items:center;justify-content:space-between;
+       margin-bottom:7px;color:var(--txt);font-size:11px;font-weight:600}
+  .color-palette-value{color:var(--dim);font:10px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;
+       text-transform:uppercase}
+  .color-palette-swatches{display:grid;grid-template-columns:repeat(8,1fr);gap:4px}
+  .color-palette-swatch{width:21px;height:21px;margin:0;padding:0;border:1px solid rgba(255,255,255,.25);
+       border-radius:3px;background:var(--swatch);cursor:pointer;transform:none}
+  .color-palette-swatch:hover,.color-palette-swatch.on{outline:2px solid var(--acc);outline-offset:1px}
+  .color-palette-add{display:flex;gap:5px;margin:8px 0 0}
+  .color-palette-add input{width:76px;min-width:0;padding:5px 6px;border:1px solid var(--line);
+       border-radius:4px;background:#111419;color:var(--txt);font:10px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace}
+  .color-palette-add button{flex:1;margin:0;padding:5px 6px;border:1px solid var(--line);
+       border-radius:4px;background:#22262e;color:var(--txt);font-size:10px;transform:none}
+  .color-palette-native{width:100%;margin:8px 0 0;padding:6px 8px;border:1px solid var(--line);
+       border-radius:4px;background:#22262e;color:var(--txt);font-size:10px;font-weight:500;transform:none}
+  .lyr input[type=number]{width:100%;padding:3px 3px;font-size:11px;text-align:right;
+       background:#20242c;border:1px solid var(--line);border-radius:3px;color:var(--txt)}
+  .lyr input[type=checkbox]{margin:0;cursor:pointer}
+  /* 위성사진 행 — 채우기·선 자리에 흑백·일반지도 */
+  .lyr-mini{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--txt);
+            white-space:nowrap;cursor:pointer;flex:none}
+  /* 위성사진 레벨 — 검정점·중간톤·흰점을 한 트랙의 세 손잡이로 다룬다. */
+  .p2levels{margin:6px 0 8px 31px;padding:7px 8px 5px;border:1px solid var(--line);
+            border-radius:5px;background:#181b21;touch-action:none;user-select:none}
+  .p2level-track{position:relative;height:18px;margin:1px 5px 3px;cursor:ew-resize}
+  .p2level-ramp{position:absolute;left:0;right:0;top:5px;height:8px;border-radius:4px;
+                background:linear-gradient(90deg,#000,#fff);border:1px solid #4a505c}
+  .p2level-handle{position:absolute;top:1px;width:12px;height:16px;margin-left:-6px;padding:0;
+                  border:0;background:transparent;cursor:ew-resize;transform:none}
+  .p2level-handle::after{content:"";display:block;width:0;height:0;margin:9px auto 0;
+                         border-left:5px solid transparent;border-right:5px solid transparent;
+                         border-bottom:7px solid var(--acc);filter:drop-shadow(0 0 1px #000)}
+  .p2level-handle[data-level-h="gamma"]::after,
+  .p2level-handle[data-d3-level-h="gamma"]::after{border-bottom-color:#9aa3b2}
+  .p2level-values{display:flex;justify-content:space-between;color:var(--dim);font-size:10px;
+                  font-variant-numeric:tabular-nums;margin:0 2px 5px}
+  .p2level-foot{display:flex;align-items:center;gap:7px}
+  .p2level-foot label{display:flex;align-items:center;gap:5px;flex:1;color:var(--dim);
+                      font-size:10px;white-space:nowrap}
+  .p2level-foot input[type=range]{margin:0;min-width:0}
+
+  /* 건물 조건 — 건물 레이어의 하위 줄. 같은 표, 같은 칸을 쓴다.
+     접기는 숨긴 체크상자와 :checked 로만 돈다. 스크립트가 끊겨도 열리고 닫힌다. */
+  .lyr-group{position:relative}
+  .lyr-expcb{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+  .lyr-expcb:not(:checked) ~ .lyr-subs{display:none}
+  .lyr-namewrap{display:flex;align-items:center;gap:4px;min-width:0}
+  .lyr-exp{flex:none;font-size:8px;line-height:1.5;padding:0 3px;cursor:pointer;
+           color:var(--dim);border:1px solid var(--line);border-radius:3px;user-select:none;
+           transition:transform .12s}
+  .lyr-expcb:not(:checked) ~ .lyr .lyr-exp{transform:rotate(-90deg)}
+  .lyr-expcb:checked ~ .lyr .lyr-exp{color:var(--acc);border-color:var(--acc)}
+  .lyr-nsub{flex:none;font-size:9px;color:var(--dim)}
+  .lyr-sub{background:rgba(255,255,255,.028);border-radius:3px}
+  .lyr-sub-mark{color:#4d5462;font-size:10px;text-align:center;user-select:none}
+  .lyr-rname{min-width:0;padding:3px 5px;font-size:11px;background:#20242c;
+             border:1px solid var(--line);border-radius:3px;color:var(--txt)}
+  .rule-cond[data-rule]{margin:0 0 3px 31px;padding:0 0 2px}
+  .rule-cond label.wide{flex:1 1 100%}
+  /* 값 목록이 길어도 칸을 밀어내지 않게 — 접힌 상태에서는 말줄임, 펴면 다 보인다 */
+  .rule-cond select{flex:1;width:100%;min-width:0;padding:2px 4px;font-size:10px;
+       background:#20242c;border:1px solid var(--line);border-radius:3px;color:var(--txt);
+       text-overflow:ellipsis}
+  .rule-cond label{min-width:0}
+  .rule-add{margin:2px 0 5px 31px}
+  .rule-add button{margin:0;padding:4px 8px;font-size:10px;transform:none;
+                   background:transparent;border:1px dashed var(--line);color:var(--dim);
+                   border-radius:4px;cursor:pointer;width:auto}
+  .rule-add button:hover{border-color:var(--acc);color:var(--acc);border-style:solid}
+  .road-analysis{margin:5px 0 8px 31px;padding:8px;border:1px solid var(--line);
+                 border-radius:5px;background:#181b21}
+  .road-analysis-on{display:flex;align-items:center;gap:6px;margin-bottom:7px;
+                    color:var(--txt);font-size:11px;font-weight:600;cursor:pointer}
+  .road-analysis>select{width:100%;padding:5px 6px;background:#20242c;border:1px solid var(--line);
+                        border-radius:4px;color:var(--txt);font-size:11px}
+  .road-analysis-colors{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}
+  .road-analysis-colors label{display:flex;align-items:center;gap:4px;min-width:0;
+                              color:var(--dim);font-size:9px;white-space:nowrap}
+  .road-analysis-colors input{min-width:0;height:24px;padding:2px;background:#20242c;
+                              border:1px solid var(--line);border-radius:3px;color:var(--txt)}
+  .road-analysis-colors input[type=color]{width:27px;flex:0 0 27px}
+  .road-analysis-colors input[type=number]{width:100%;text-align:right}
+  .road-analysis-number-colors{margin-top:6px}
+  .road-analysis-common{margin-top:7px;padding-top:7px;border-top:1px solid #30353e}
+  .road-analysis-categories{display:flex;flex-direction:column;gap:3px;margin-top:7px;
+                            max-height:162px;overflow:auto}
+  .road-analysis-categories label{display:grid;grid-template-columns:15px 25px minmax(0,1fr) auto;
+                                  align-items:center;gap:5px;min-height:25px;color:var(--txt);
+                                  font-size:10px;cursor:pointer}
+  .road-analysis-categories input[type=color]{width:25px;height:22px;padding:1px;
+                                              border:1px solid var(--line);border-radius:3px;
+                                              background:#20242c}
+  .road-analysis-categories span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .road-analysis-categories small{color:var(--dim);font-size:9px;font-variant-numeric:tabular-nums}
+  .road-analysis-ramp{height:10px;margin-top:8px;border:1px solid #4a505c;border-radius:5px;
+                      background:linear-gradient(90deg,var(--road-low),var(--road-high))}
+  .road-analysis-values{display:flex;justify-content:space-between;margin-top:2px;
+                        color:var(--dim);font-size:9px;font-variant-numeric:tabular-nums}
+  .road-analysis p{margin:6px 0 0;color:var(--dim);font-size:9px;line-height:1.35}
+  .road-analysis-empty{color:var(--dim);font-size:10px;line-height:1.45}
+  .precision-road{margin-top:6px}
+  .precision-road-head{display:flex;align-items:center;justify-content:space-between;gap:7px;
+                       margin-bottom:6px;color:var(--txt);font-size:10px;font-weight:600}
+  .precision-road-head button{width:auto;margin:0;padding:4px 6px;font-size:9px}
+  .precision-road-status{margin-bottom:7px;padding-bottom:6px;border-bottom:1px solid #30353e;
+                         color:var(--dim);font-size:9px;line-height:1.45}
+  .precision-road-list{display:flex;flex-direction:column;gap:3px}
+  .precision-road-row{display:grid;grid-template-columns:15px 25px minmax(0,1fr) auto;
+                      align-items:center;gap:5px;min-height:25px;color:var(--txt);font-size:10px}
+  .precision-road-row input[type=checkbox]{width:auto;margin:0}
+  .precision-road-row input[type=color]{width:25px;height:22px;padding:1px;border-radius:3px}
+  .precision-road-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .precision-road-row small{color:var(--dim);font-size:9px;font-variant-numeric:tabular-nums}
+  .precision-road-row.loading small{color:var(--acc)}
+  .precision-road-row.error small{color:#e6a08f}
+  .parcel-hatch{margin:5px 0 8px 31px;padding:8px;border:1px solid var(--line);
+                border-radius:5px;background:#181b21}
+  .parcel-hatch-global{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:7px}
+  .parcel-hatch-global label{color:var(--dim);font-size:9px;min-width:0}
+  .parcel-hatch-global input{width:100%;margin-top:3px;padding:4px;background:#20242c;
+                             border:1px solid var(--line);border-radius:3px;color:var(--txt);font-size:10px}
+  .parcel-hatch-list{display:grid;gap:4px}
+  .parcel-hatch-row{display:grid;grid-template-columns:minmax(0,1fr) 74px 28px;gap:5px;align-items:center}
+  .parcel-hatch-row>label{display:flex;align-items:center;gap:4px;min-width:0;font-size:10px;color:var(--txt)}
+  .parcel-hatch-row>label b{font-weight:600}
+  .parcel-hatch-row>label span{margin-left:auto;color:var(--dim);font-size:8px;white-space:nowrap}
+  .parcel-hatch-row select{min-width:0;padding:4px 3px;background:#20242c;border:1px solid var(--line);
+                           border-radius:3px;color:var(--txt);font-size:9px}
+  .parcel-hatch-row>input[type=color]{width:28px;height:24px;padding:2px;border:1px solid var(--line);
+                                      border-radius:3px;background:#20242c}
+  .parcel-hatch p{margin:7px 0 0;color:var(--dim);font-size:9px;line-height:1.35}
+  .rule-del{background:none;border:0;color:var(--dim);cursor:pointer;font-size:11px;
+            padding:0;width:auto;margin:0;flex:none;transform:none}
+  .rule-del:hover{color:var(--sel)}
+
+  .rule-del{background:none;border:0;color:var(--dim);cursor:pointer;font-size:11px;padding:0}
+  .rule-del:hover{color:var(--sel)}
+  .rule-cond{display:flex;align-items:center;gap:4px;margin-top:5px;
+             font-size:10px;color:var(--dim);flex-wrap:wrap}
+  .rule-cond label{display:flex;align-items:center;gap:3px;flex:1 1 0;min-width:0}
+  .rule-cond > label > span,.rule-cond > label{white-space:nowrap}
+  .rule-cond input{flex:1;min-width:0;background:#20242c;border:1px solid var(--line);
+        border-radius:3px;color:var(--txt);font-size:11px;padding:2px 4px}
+  .rule-n{margin-left:auto;color:var(--sel);font-weight:600;font-size:10px;white-space:nowrap}
+  input[type=range]{width:100%;accent-color:var(--sel);margin:2px 0 4px}
+  .dim{color:var(--dim);font-weight:400}
+  .data-warning{color:#e0b088}
+  .ticks{display:flex;justify-content:space-between;color:var(--dim);
+         font-size:10px;margin:-2px 2px 6px}
+  .onoff{display:flex;align-items:center;gap:7px;margin:0 0 10px;
+         color:var(--txt);font-size:13px;cursor:pointer}
+  .onoff input[type=checkbox]{width:auto;flex:0 0 auto;margin:0}
+  .viewrow{display:flex;gap:5px;margin-bottom:5px}
+  .viewgo{flex:1;text-align:left;background:#23272f;border:1px solid var(--line);
+          color:var(--txt);padding:6px 9px;border-radius:4px;cursor:pointer;font-size:12px}
+  .viewgo:hover{border-color:var(--sel)}
+  .viewdel{flex:0 0 28px;background:none;border:1px solid var(--line);color:var(--dim);
+           border-radius:4px;cursor:pointer}
+  .viewdel:hover{color:var(--sel);border-color:var(--sel)}
+  .d3-view-actions{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px}
+  .d3-view-actions button{margin:0}
+  .d3-section-tool{margin:10px 0 12px;padding:9px 10px;border:1px solid var(--line);background:var(--panel2)}
+  .d3-section-toggle{display:flex;align-items:center;gap:7px;margin:0;color:var(--txt);font-weight:700}
+  .d3-section-toggle input{width:auto;margin:0}
+  .d3-section-controls{display:grid;gap:7px;margin-top:9px}
+  .d3-section-controls[hidden]{display:none}
+  .d3-section-controls label{display:grid;grid-template-columns:72px 1fr 48px;align-items:center;gap:7px;margin:0;font-size:10px}
+  .d3-section-controls input[type=range]{min-width:0;margin:0}
+  .d3-section-controls input[type=color]{width:48px;height:25px;margin:0;padding:2px}
+  .d3-section-actions{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .d3-section-actions button{margin:0}
+  .d3-view-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+                margin-top:12px;color:var(--txt);font-size:11px;font-weight:600}
+  .d3-view-head button{width:auto;margin:0;padding:5px 8px;font-size:10px}
+  .d3-view-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:7px}
+  .d3-view-card{position:relative;min-width:0}
+  .d3-view-card>button:first-child{display:block;width:100%;margin:0;padding:0;overflow:hidden;
+                                  text-align:left;background:#181b21;border:1px solid var(--line);
+                                  border-radius:5px;color:var(--txt);transform:none}
+  .d3-view-card>button:first-child:hover{border-color:var(--acc)}
+  .d3-view-card img,.d3-view-empty{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;
+                                   background:#111318}
+  .d3-view-empty{display:grid;place-items:center;color:#555d6b;font-size:10px}
+  .d3-view-card span{display:block;padding:5px 6px;font-size:9px;white-space:nowrap;
+                     overflow:hidden;text-overflow:ellipsis}
+  .d3-view-del{position:absolute;right:3px;top:3px;width:20px;height:20px;margin:0;padding:0;
+               border:1px solid rgba(255,255,255,.25);background:rgba(15,17,21,.82);
+               color:#cbd0d8;border-radius:3px;font-size:10px;transform:none}
+  .d3-view-note{min-height:14px;margin-top:5px;color:var(--dim);font-size:10px}
+
+  /* 제목줄 — 여기가 붙박이다. h1 을 붙박이로 두면 그 옆의 프리셋 칸이 같이
+     안 붙어 스크롤할 때 탭 밑으로 파고들어 가려진다. */
+  .titlebar{display:flex;align-items:flex-start;gap:10px;
+            padding:16px 18px 12px;border-bottom:1px solid var(--line);
+            position:sticky;top:0;z-index:6;background:var(--panel)}
+  .titlebar h1{flex:1;min-width:0;padding:0;border:0;position:static;background:none}
+  h1{margin:0;font-size:15px;letter-spacing:.02em}
+  h1 small{display:block;color:var(--dim);font-weight:400;font-size:12px;margin-top:3px}
+
+  .sec{padding:14px 18px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  /* 섹션 제목은 눈에 띄어야 한다 — 어디까지 왔는지 짚어 주는 표지다 */
+  .sec h2{margin:0 0 10px;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;
+          color:var(--txt);font-weight:700}
+  /* 대상지 전에도 어떤 단계가 있는지는 보인다. 다만 아직 못 쓰는 칸이라고 알린다. */
+  .sec.waiting > h2{color:var(--dim);font-weight:600}
+  .sec.waiting > h2::after{content:"대상지를 먼저";float:right;font-size:9px;
+       letter-spacing:0;text-transform:none;color:var(--dim);opacity:.75}
+  .sec h2 span{text-transform:none;letter-spacing:0}   /* 단위(m²)가 대문자로 바뀌는 것 방지 */
+  /* 섹션 안의 작은 제목 — h2 와 같은 글꼴·크기·색으로 맞추고 구분선만 얹는다 */
+  /* 확정한 값은 제목 오른쪽에 붙여 둔다. 접어도 뭘 골랐는지 보인다. */
+  .badge{margin-left:auto;color:var(--acc);font-size:11px;font-weight:600;
+         text-transform:none;letter-spacing:0;white-space:nowrap;
+         overflow:hidden;text-overflow:ellipsis;max-width:58%}
+  .badge:empty{display:none}
+
+  /* 무엇을 내보낼지 — 네 개 중 하나 */
+  .pickrow{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px}
+  .pickrow button{margin:0;padding:8px 6px;display:flex;flex-direction:column;gap:2px;
+                  align-items:flex-start;font-size:12px;line-height:1.25}
+  .pickrow button span{font-size:10px;color:var(--dim);font-weight:400}
+  .pickrow button.on{border-color:var(--acc);color:var(--acc)}
+  .pickrow button.on span{color:var(--acc);opacity:.75}
+  .pickrow.scope3{grid-template-columns:repeat(3,minmax(0,1fr))}
+
+  .subhead{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--dim);font-weight:600;
+           margin:16px 0 10px;padding-top:12px;border-top:1px solid var(--line)}
+
+  label{display:block;font-size:12px;color:var(--dim);margin:8px 0 4px}
+  input,select{width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--line);
+               background:#12151a;color:var(--txt);font:inherit}
+  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1}
+
+  button{width:100%;margin-top:10px;padding:9px;border:0;border-radius:6px;
+         background:var(--acc);color:#1a1207;font:600 14px/1 inherit;cursor:pointer}
+  button:hover{filter:brightness(1.08)}
+  button:disabled{opacity:.45;cursor:default}
+  button.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}
+  button.ghost.on{border-color:var(--sel);color:var(--sel)}
+  button.danger:hover{border-color:var(--sel);color:var(--sel)}
+  #map.boxing{cursor:crosshair}
+
+  .tabs{display:flex;gap:6px;margin-bottom:4px}
+  .tab{flex:1;margin:0;padding:7px 0;background:transparent;border:1px solid var(--line);
+       color:var(--dim);font-weight:500;font-size:12px}
+  .tab.on{background:#12151a;border-color:var(--acc);color:var(--acc)}
+  .hint{margin-top:8px;padding:8px 9px;background:#12151a;border:1px solid var(--line);
+        border-radius:5px;font-size:11px;line-height:1.6;color:var(--dim)}
+  .hint b{color:var(--acc)}
+
+  .checks{margin:10px 0 2px}
+  .checks label{display:flex;align-items:center;gap:8px;margin:0 0 6px;color:var(--txt);font-size:12px;cursor:pointer}
+  .checks input{width:auto;margin:0}
+  .checks.inline{display:flex;gap:14px;margin:12px 0 0;padding-top:10px;border-top:1px solid var(--line)}
+  .checks.inline label{margin:0;color:var(--dim)}
+
+  /* 사각형/점찍기는 둘 중 하나다. 점찍기를 고르면 비율은 쓸 수 없다. */
+
+  /* 사각형 드래그 = 비율을 고르는 드롭다운 버튼. 고르면 바로 그리기가 켜진다. */
+  .ddwrap{position:relative}
+  button.dd{display:flex;align-items:center;justify-content:center;gap:6px;width:100%}
+  button.dd::after{content:"▾";font-size:9px;color:var(--dim)}
+  button.dd .cap{color:var(--acc);font-size:11px;font-weight:400}
+  button.dd.on .cap{color:inherit}
+  .ddmenu{display:none;position:absolute;z-index:900;left:0;right:0;top:calc(100% + 4px);
+          background:var(--panel);border:1px solid var(--line);border-radius:7px;
+          padding:4px;box-shadow:0 8px 22px rgba(0,0,0,.45)}
+  .ddmenu.open{display:block}
+  .ddmenu button{display:block;width:100%;margin:0;padding:7px 9px;text-align:left;
+                 background:transparent;border:0;border-radius:5px;color:var(--txt);
+                 font:12px/1.3 inherit;cursor:pointer}
+  .ddmenu button:hover{background:#12151a}
+  .ddmenu button.sel{color:var(--acc);font-weight:600}
+  /* 2단 메뉴 — 사각형·원만 보이고, 얹으면 오른쪽으로 펼쳐진다 */
+  .ddsub{position:relative}
+  .ddparent{display:flex !important;align-items:center;justify-content:space-between}
+  .ddparent::after{content:"›";color:var(--dim);font-size:13px;line-height:1}
+  .ddflyout{display:none;position:absolute;left:100%;top:-4px;min-width:150px;z-index:950;
+            background:var(--panel);border:1px solid var(--line);border-radius:7px;
+            padding:4px;box-shadow:0 8px 22px rgba(0,0,0,.45)}
+  .ddsub:hover > .ddflyout,.ddsub.open > .ddflyout{display:block}
+  .ddsub:hover > .ddparent{background:#12151a;color:var(--acc)}
+  .ddflyout button{display:block;width:100%;margin:0;padding:7px 9px;text-align:left;
+                   background:transparent;border:0;border-radius:5px;color:var(--txt);
+                   font:12px/1.3 inherit;cursor:pointer;white-space:nowrap}
+  .ddflyout button:hover{background:#12151a}
+  .ddflyout button.sel{color:var(--acc);font-weight:600}
+  .lyr-ls{width:100%;padding:2px 3px;font-size:10px}
+  /* 내보내기 창 */
+  .modal{position:fixed;inset:0;z-index:2000;background:rgba(8,10,13,.62);
+         display:flex;align-items:center;justify-content:center}
+  .modal-box{width:min(420px,92vw);background:var(--panel);border:1px solid var(--line);
+             border-radius:10px;padding:18px 20px;box-shadow:0 18px 48px rgba(0,0,0,.55)}
+  .modal-box h3{margin:0 0 4px;font-size:15px}
+  .modal-note{color:var(--acc);font-size:12px;margin-bottom:12px}
+  .exlist{display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
+  .exlist label{display:flex;align-items:center;gap:8px;margin:0;padding:7px 8px;
+                border-radius:5px;font-size:13px;color:var(--txt);cursor:pointer}
+  .exlist label:hover{background:#12151a}
+  .exlist input{width:auto;margin:0}
+  .exlist span{color:var(--dim);font-size:11px;margin-left:auto}
+  .modal-box.wide{width:min(760px,94vw)}
+  .excols{display:grid;grid-template-columns:1fr 260px;gap:16px;margin-bottom:14px}
+  .expreview{display:flex;flex-direction:column;gap:6px}
+  #exm-canvas{width:100%;height:auto;aspect-ratio:1;background:#fff;border:1px solid var(--line);
+              border-radius:6px}
+  .exhint{font-size:11px;color:var(--dim);line-height:1.5}
+  .modal-row{display:flex;gap:8px}
+  .modal-row button{margin:0;flex:1}
+
+  /* 사이트 분석의 대지 상태가 다이어그램 캐시와 다를 때만 잠깐 나타난다.
+     화면 전체를 잠가, 갱신 중인 예전 대지를 잘못 조작하지 않게 한다. */
+  .site-change-overlay{position:fixed;inset:0;z-index:15000;display:flex;
+       align-items:center;justify-content:center;background:rgba(5,7,10,.68);
+       backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);opacity:0;
+       visibility:hidden;pointer-events:none;transition:opacity .16s ease,visibility 0s linear .16s}
+  .site-change-overlay.on{opacity:1;visibility:visible;pointer-events:auto;
+       transition:opacity .16s ease}
+  .site-change-card{width:min(360px,calc(100vw - 36px));padding:22px 24px 20px;
+       background:#1c1f26;border:1px solid #3a404b;border-radius:9px;
+       box-shadow:0 22px 64px rgba(0,0,0,.58);text-align:center}
+  .site-change-spinner{width:32px;height:32px;margin:0 auto 14px;border-radius:50%;
+       border:3px solid #343a45;border-top-color:var(--acc);animation:site-change-spin .8s linear infinite}
+  .site-change-card h3{margin:0 0 5px;font-size:16px;font-weight:700;color:var(--txt)}
+  .site-change-card p{margin:0;color:var(--dim);font-size:12px;line-height:1.55}
+  .site-change-track{height:2px;margin-top:16px;overflow:hidden;background:#303641}
+  .site-change-track::after{content:"";display:block;width:42%;height:100%;background:var(--acc);
+       animation:site-change-track 1.15s ease-in-out infinite}
+  @keyframes site-change-spin{to{transform:rotate(360deg)}}
+  @keyframes site-change-track{from{transform:translateX(-110%)}to{transform:translateX(340%)}}
+  @media (prefers-reduced-motion:reduce){
+    .site-change-spinner,.site-change-track::after{animation-duration:2.2s}
+  }
+
+  /* 지도 오른쪽 — 레이어 목록 아래에 필터를 붙인다 */
+  #rightpanel{position:absolute;right:10px;top:10px;z-index:800;width:252px;
+              background:rgba(28,31,38,.96);border:1px solid var(--line);border-radius:8px;
+              box-shadow:0 8px 24px rgba(0,0,0,.4);overflow:hidden}
+  .rp-head{display:flex;align-items:center;gap:6px;padding:9px 11px;cursor:pointer;
+           font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+           color:var(--dim);user-select:none}
+  .rp-head i{margin-left:auto;font-style:normal;font-size:9px;transition:transform .12s}
+  #rightpanel.folded .rp-head i{transform:rotate(-90deg)}
+  #rightpanel.folded .rp-body{display:none}
+  /* 대상지 전에는 켤 것이 없어 흐리게 두되, 필터 여는 ▾ 와 그 안내는 또렷하게 남긴다 */
+  #rightpanel.waiting .rp-group > .rp-row > label,
+  #rightpanel.waiting #L-extent{opacity:.4}
+  #rightpanel.waiting #rp-sum{color:var(--dim);font-weight:400}
+  .rp-body{max-height:var(--rp-h,60vh);overflow-y:auto;padding:0 11px 11px}
+  /* 아래 손잡이를 끌어 패널 높이를 조절한다 */
+  .rp-grip{height:12px;cursor:ns-resize;display:flex;align-items:center;justify-content:center;
+           border-top:1px solid var(--line);background:rgba(255,255,255,.025);user-select:none}
+  .rp-grip::before{content:"";width:30px;height:2px;border-radius:2px;background:#4a5262}
+  .rp-grip:hover::before{background:var(--acc)}
+  #rightpanel.folded .rp-grip{display:none}
+  .rp-base{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:2px 0 8px}
+  .rp-base button{margin:0;padding:6px 0;font-size:11px;background:transparent;
+                  border:1px solid var(--line);color:var(--dim);border-radius:5px}
+  .rp-base button.on{border-color:var(--acc);color:var(--acc)}
+  .rp-row{display:flex;align-items:center;gap:7px;margin:0;padding:5px 2px;font-size:12px;
+          color:var(--txt);cursor:pointer}
+  .rp-row label{display:flex;align-items:center;gap:7px;margin:0;flex:1;
+                font-size:12px;color:var(--txt);cursor:pointer}
+  .rp-row input{width:auto;margin:0}
+  /* 필터 여닫이는 자바스크립트를 쓰지 않는다.
+     숨긴 체크상자 하나와 그것을 누르는 라벨, 그리고 :checked 선택자면 충분하다.
+     스크립트가 어디서 끊기든 이 단추만은 살아 있어야 한다. */
+  .rp-expcb{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+  .rp-exp{width:auto;margin:0;padding:1px 6px;background:transparent;border:1px solid var(--line);
+          border-radius:4px;color:var(--dim);font-size:9px;line-height:1.6;cursor:pointer;
+          display:inline-block;flex:none}
+  .rp-expcb:checked ~ .rp-row .rp-exp{border-color:var(--acc);color:var(--acc)}
+  .rp-expcb:focus-visible ~ .rp-row .rp-exp{outline:2px solid var(--acc);outline-offset:1px}
+  .rp-group{border-bottom:1px solid var(--line);position:relative}
+  .rp-group:last-of-type{border-bottom:0}
+  .rp-slot{display:none;padding:2px 0 8px 6px;border-left:2px solid var(--line);margin-left:6px}
+  .rp-expcb:checked ~ .rp-slot{display:block}
+  .rp-slot .sec{padding:0;border:0}
+  .rp-slot .sec > h2{display:none}
+  .rp-note{margin:4px 2px 6px;font-size:11px;line-height:1.5;color:var(--dim)}
+  /* 필터를 숨기는 규칙은 두지 않는다. 예전에는 대상지 전이면 감췄는데,
+     그 상태를 푸는 것이 스크립트라서 스크립트가 한 번 끊기면 영영 감춰진 채였다.
+     빈 칸이 잠깐 보이는 편이 낫다 — 적어도 무엇이 잘못됐는지는 보인다. */
+  .rp-body::-webkit-scrollbar{width:7px}
+  .rp-body::-webkit-scrollbar-thumb{background:#333947;border-radius:4px}
+
+  /* 겹친 자리를 눌렀을 때 커서 옆에 뜨는 선택지 */
+  .pickmenu{position:fixed;z-index:1200;padding:4px;min-width:168px;
+            background:rgba(28,31,38,.98);border:1px solid var(--line);border-radius:7px;
+            box-shadow:0 10px 28px rgba(0,0,0,.55)}
+  .pickmenu button{display:flex;align-items:center;gap:8px;width:100%;margin:0;
+                   padding:7px 9px;background:transparent;border:0;border-radius:5px;
+                   color:var(--txt);font-size:12px;text-align:left;cursor:pointer;transform:none}
+  .pickmenu button:hover{background:rgba(255,255,255,.08)}
+  .pickmenu i{width:10px;height:10px;border-radius:2px;flex:none}
+  .pickmenu i.bldg{background:#cfe6d8;border:1px solid #2f6f4e}
+  .pickmenu i.parcel{background:transparent;border:1px solid #9aa3b2}
+  .pickmenu small{margin-left:auto;padding-left:8px;color:var(--dim);font-size:10px;white-space:nowrap}
+
+  .muted{opacity:.35;pointer-events:none}
+
+  /* 베타 — 어느 시점 코드로 돌고 있는지 항상 보이게 */
+
+  /* 섹션 접기 — 패널이 길어져서 제목을 눌러 접을 수 있게 한다 */
+  .sec > h2{cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+  .sec > h2::before{content:"▾";font-size:9px;color:var(--dim);transition:transform .12s;
+                    flex:0 0 auto;transform:translateY(-1px)}
+  .sec.folded > h2::before{transform:rotate(-90deg) translateX(1px)}
+  .sec.folded > *:not(h2){display:none !important}
+  .sec > h2 .grow{flex:1}
+  /* 수집 진행률 — 어디까지 왔는지 보이게 */
+  #progwrap{margin-top:10px}
+  .progbar{height:6px;border-radius:3px;background:#12151a;overflow:hidden;
+           border:1px solid var(--line)}
+  #progfill{height:100%;width:0;background:var(--acc);border-radius:3px;
+            transition:width .35s ease}
+  #progfill.done{background:var(--ok)}
+  .progtext{display:flex;justify-content:space-between;margin-top:5px;
+            font-size:11px;color:var(--dim)}
+  .progtext b{color:var(--acc);font-variant-numeric:tabular-nums}
+
+  .verbox{border-bottom:0}
+  .verline{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  #ver{font:11px/1.5 ui-monospace,Consolas,monospace;color:var(--dim)}
+  #ver b{color:var(--acc);font-weight:600}
+  #ver.stale b{color:var(--sel)}
+  button.tiny{width:auto;margin:0;padding:5px 9px;font-size:11px;flex:0 0 auto}
+  #fcount{color:var(--acc)}
+
+  #log{flex:0 0 auto;max-height:210px;overflow:auto;padding:12px 18px;
+       font:11px/1.6 ui-monospace,Consolas,monospace;
+       color:var(--dim);white-space:pre-wrap;word-break:break-all}
+  #log::-webkit-scrollbar{width:7px}
+  #log::-webkit-scrollbar-thumb{background:#333947;border-radius:4px}
+  #log b{color:var(--acc);font-weight:600}
+
+  /* 지오코딩 결과를 눈에 띄게 — "서촌"이 함안군 서촌리로 잡히는 일이 있다 */
+  .addr{background:#12151a;border:1px solid var(--line);border-left:2px solid var(--acc);
+        border-radius:5px;padding:7px 9px;margin-bottom:9px;font-size:12px;color:var(--acc)}
+  .addr em{display:block;color:var(--dim);font-style:normal;font-size:11px;margin-top:2px}
+  .stat{display:flex;justify-content:space-between;padding:3px 0;font-size:12px}
+  .stat span:last-child{color:var(--acc);font-variant-numeric:tabular-nums}
+
+  #picked{max-height:170px;overflow:auto;margin-top:8px}
+  .chip{display:flex;justify-content:space-between;gap:8px;padding:5px 8px;margin-bottom:4px;
+        background:#12151a;border:1px solid var(--line);border-radius:5px;font-size:12px}
+  .chip b{color:var(--sel);font-weight:600}
+  .chip-remove{border:0;background:none;color:var(--dim);font:inherit;line-height:1;
+               padding:0;margin:0;width:auto;cursor:pointer}
+  .chip-remove:hover{color:var(--sel)}
+
+  .leaflet-popup-content-wrapper{background:var(--panel);color:var(--txt);border-radius:8px}
+  .leaflet-popup-tip{background:var(--panel)}
+  .pop{font-size:12px;min-width:190px}
+  .pop h3{margin:0 0 6px;font-size:14px;color:var(--acc)}
+  .pop div{display:flex;justify-content:space-between;gap:12px;padding:1px 0}
+  .pop div span:first-child{color:var(--dim)}
+  .pop button{margin-top:8px;padding:6px}
+  .popnote{margin-top:6px;padding:5px 6px;background:#12151a;border-radius:4px;
+           font-size:11px;color:var(--dim);line-height:1.5}
+
+  .legend{position:absolute;right:12px;bottom:22px;z-index:500;background:rgba(28,31,38,.94);
+          border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:11px}
+  .legend div{display:flex;align-items:center;gap:7px;padding:2px 0}
+  .legend i{width:14px;height:10px;border-radius:2px;display:inline-block}
+
+  /* 2D 도판 왼쪽 위 정보 — 화면에만. 내보낼 때는 빠진다. */
+  #diagram2d{position:relative}
+  .p2info{position:absolute;left:16px;top:14px;z-index:5;pointer-events:none;
+          font-size:11px;line-height:1.7;color:#5b6472;
+          text-shadow:0 1px 0 rgba(255,255,255,.7)}
+  .p2info b{color:#2f3540;font-weight:600}
+  .p2info .t{font-size:12px;font-weight:600;color:#2f3540;letter-spacing:.02em}
+  .aerial-progress{min-width:210px;margin-top:6px;padding-top:5px;border-top:1px solid rgba(91,100,114,.25)}
+  .aerial-progress-head{display:flex;justify-content:space-between;gap:10px;line-height:1.4}
+  .aerial-progress-head b{font-variant-numeric:tabular-nums}
+  .aerial-progress progress{display:block;width:100%;height:5px;margin-top:4px;accent-color:#e2564a}
+
+  /* 디자인 섹터 — 켜면 그 아래 설정칸이 펴진다 */
+  .dztoggle{display:flex;align-items:center;gap:8px;margin:0;padding:6px 2px;
+            font-size:12px;color:var(--txt);cursor:pointer}
+  .dztoggle input{width:auto;margin:0;flex:none;cursor:pointer}
+  .dzbox{margin:0 0 10px 20px;padding-left:9px;border-left:2px solid var(--line)}
+  .dzbox .row{display:flex;gap:5px;margin-top:5px;align-items:flex-end}
+  .dzbox label{flex:1 1 0;min-width:0;font-size:10px;color:var(--dim);
+               display:flex;flex-direction:column;gap:2px}
+  .dzbox input[type=number]{width:100%;padding:3px 5px;font-size:11px;text-align:right;
+       background:#20242c;border:1px solid var(--line);border-radius:3px;color:var(--txt)}
+  .dzbox select{padding:3px 5px;font-size:11px}
+  .dzbox button{white-space:nowrap;padding:5px 8px;font-size:10px;width:auto}
+  .cwrap{display:flex !important;flex-direction:row !important;align-items:center;gap:5px;
+         flex:0 0 auto !important;font-size:11px;color:var(--dim)}
+  .cwrap input[type=color]{width:26px;height:22px;padding:0;border:1px solid var(--line);
+       border-radius:3px;background:none;cursor:pointer;flex:none}
+  #p2m-canvas{width:100%;height:auto;aspect-ratio:1;background:#fff;
+              border:1px solid var(--line);border-radius:6px}
+  #dgm-canvas{width:100%;height:auto;aspect-ratio:1;background:#fff;
+              border:1px solid var(--line);border-radius:6px}
+  .dginfo{color:rgba(235,238,244,.82);text-shadow:0 1px 2px rgba(0,0,0,.85);
+          padding:7px 10px;background:rgba(18,20,26,.62);border-radius:5px;
+          backdrop-filter:blur(3px)}
+  .dginfo b,.dginfo .t{color:#fff}
+  .dginfo .aerial-progress{border-top-color:rgba(255,255,255,.2)}
+  .dginfo .aerial-progress-head{color:rgba(235,238,244,.88)}
+  .d3-layer-sub{margin:5px 0 9px 31px;padding:8px 9px;border-left:2px solid var(--line);
+                background:#181b21;border-radius:0 5px 5px 0}
+  .d3-layer-sub label{display:flex;align-items:center;gap:7px;margin:4px 0;
+                      font-size:10px;color:var(--dim)}
+  .d3-layer-sub label b{margin-left:auto;color:var(--txt);font-variant-numeric:tabular-nums}
+  .d3-layer-sub input[type=range]{flex:1;min-width:0;margin:0}
+  .d3-layer-sub select{flex:1;min-width:0;margin:0;padding:5px 7px;font-size:10px}
+  .d3-layer-sub .hint{margin:5px 0 1px;line-height:1.45}
+  .d3-layer-sub .d3-map-toggle input[type=checkbox]{width:auto;flex:0 0 auto;margin:0}
+  .d3-layer-sub .d3-map-toggle .dim{margin-left:auto}
+  .d3-aerial-options{margin:6px 0 8px;padding:6px 7px;border:1px solid var(--line);border-radius:5px}
+  .d3-aerial-options.disabled{opacity:.45}
+  .d3-aerial-options input[type=number]{width:58px;margin-left:auto}
+  .d3-sun-clock{margin:0 0 8px;padding:7px;border:1px solid var(--line);border-radius:5px;
+                background:#14171c}
+  .d3-layer-sub .d3-sun-mode{margin:0 0 6px;color:var(--txt)}
+  .d3-layer-sub .d3-sun-mode input{width:auto;flex:0 0 auto;margin:0}
+  .d3-layer-sub .d3-sun-mode span{margin-left:auto;color:var(--dim);font-size:9px}
+  .d3-sun-clock-row{display:flex;align-items:center;gap:5px}
+  .d3-sun-clock-row input{min-width:0;flex:1;padding:5px 6px;font-size:10px;color:var(--txt);
+                          color-scheme:dark}
+  .d3-sun-clock-row button{width:auto;flex:none;margin:0;padding:6px 8px;font-size:10px}
+  .d3-sun-clock .hint{font-variant-numeric:tabular-nums}
+  .d3-sun-clock .hint.night{color:#d7a47d}
+  .d3-manual-sun{transition:opacity .15s ease}
+  .d3-manual-sun.disabled{opacity:.42}
+  .d3-manual-sun.disabled label{cursor:not-allowed}
+  .d3-building-model{margin:8px 0 2px;padding:7px;border:1px solid var(--line);border-radius:5px;
+                     background:#14171c}
+  .d3-building-model-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+  .d3-building-model-actions button{min-width:0;margin:0;padding:6px 4px;font-size:9px;white-space:nowrap}
+  .d3-building-model-actions button.on{border-color:var(--acc);color:var(--acc)}
+  .d3-building-model-state{display:flex;gap:6px;align-items:center;margin-top:7px;color:var(--dim);
+                           font-size:10px;min-width:0}
+  .d3-building-model-state b{color:var(--txt);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .d3-building-model-state span{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dgp-cols{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:16px;margin:12px 0}
+  #dgp-canvas{display:block;width:100%;height:auto;aspect-ratio:4/3;background:#eef0f3;
+              border:1px solid var(--line);border-radius:6px;cursor:crosshair;touch-action:none}
+  .dgp-controls{display:flex;flex-direction:column;gap:8px}
+  .dgp-controls label{display:grid;grid-template-columns:1fr 112px;align-items:center;gap:8px;
+                      margin:0;color:var(--dim);font-size:11px}
+  .dgp-controls input{width:100%;margin:0;padding:6px 7px;font-variant-numeric:tabular-nums}
+  .dgp-controls .hint{margin:0;padding:8px;background:#14171c;border:1px solid var(--line);border-radius:5px}
+  @media(max-width:720px){.dgp-cols{grid-template-columns:1fr}.dgp-controls{display:grid;grid-template-columns:1fr 1fr}}
+  .d3-context-expand{margin:8px 0;padding:8px;border:1px solid #554337;border-radius:5px;
+                     background:#1d1b1a;color:var(--dim);font-size:10px}
+  .d3-context-expand>div:first-child{display:flex;justify-content:space-between;gap:8px;
+                                     color:var(--txt);font-variant-numeric:tabular-nums}
+  .d3-context-expand>div:first-child b{color:var(--acc)}
+  .d3-context-expand button{width:100%;margin:7px 0 0;padding:7px 8px;font-size:10px}
+  .d3-context-expand progress{display:block;width:100%;height:5px;margin:7px 0 5px;
+                              accent-color:var(--acc)}
+  .d3-context-expand small{display:block;line-height:1.4;color:var(--dim)}
+  .render-pills{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+  .render-pills button{margin:0;padding:7px 5px;font-size:11px;background:transparent;
+                       color:var(--dim);border:1px solid var(--line)}
+  .render-pills button.on{border-color:var(--acc);color:var(--acc);background:#12151a}
+  .modal-box.nano-wide{width:min(1080px,96vw)}
+  .nano-cols{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;align-items:stretch}
+  .nano-preview{min-height:480px;display:flex;align-items:center;justify-content:center;
+                overflow:hidden;background:#090b0f;border:1px solid var(--line);border-radius:7px}
+  .nano-preview img{display:block;max-width:100%;max-height:70vh;object-fit:contain}
+  .nano-controls{display:flex;flex-direction:column;min-width:0}
+  .nano-location{margin-bottom:12px;padding:9px 10px;background:#0c0f14;border:1px solid var(--line);
+                 border-radius:6px;line-height:1.45}
+  .nano-location span{display:block;color:var(--dim);font-size:10px;margin-bottom:2px}
+  .nano-location strong{display:block;color:var(--txt);font-size:13px;font-weight:600}
+  .nano-location small{display:block;color:var(--dim);font-size:11px;margin-top:2px}
+  .nano-controls textarea{width:100%;min-height:310px;flex:1;resize:vertical;line-height:1.55;
+                          font-size:12px;background:#0c0f14;color:var(--txt);border:1px solid var(--line);
+                          border-radius:6px;padding:10px;box-sizing:border-box}
+  .nano-controls button{margin-top:10px}
+  #dgn-status[data-kind="error"]{color:#ef7770}
+  #dgn-status[data-kind="done"]{color:#79c594}
+  @media(max-width:760px){.nano-cols{grid-template-columns:1fr}.nano-preview{min-height:300px}}
+
+  /* 프리셋 — 잡아 놓은 상태를 담아 두는 다섯 칸 */
+  .presets{display:flex;gap:4px;flex:none;margin-top:1px}
+  .presets button{width:22px;height:22px;margin:0;padding:0;flex:none;transform:none;
+                  font-size:11px;font-weight:600;line-height:1;border-radius:5px;
+                  background:transparent;border:1px solid var(--line);color:#4d5462;
+                  cursor:pointer}
+  .presets button.has{border-color:var(--acc);color:var(--acc)}
+  .presets button.has:hover{background:var(--acc);color:#1c1f26}
+  .presets button:not(.has){cursor:default}
+  .presets button.on{background:var(--acc);border-color:var(--acc);color:#1c1f26}
+  /* 저장할 칸 고르기 — 04 안에서 잠깐 펴진다 */
+  .ps-pick{display:flex;gap:5px;margin-top:6px}
+  .ps-pick button{flex:1;margin:0;padding:6px 0;font-size:11px;transform:none;
+                  background:transparent;border:1px solid var(--line);color:var(--txt);
+                  border-radius:5px;cursor:pointer}
+  .ps-pick button:hover{border-color:var(--acc);color:var(--acc)}
+  .ps-pick button b{display:block;font-size:13px}
+  .ps-pick button span{display:block;font-size:9px;color:var(--dim)}
+
+  /* ─────────────────────────────────────────── 폰·좁은 화면 — 보기 위주
+     패널이 340px 를 고정으로 먹어 아이폰에서는 지도에 53px 밖에 안 남았다.
+     지도를 위로 올려 화면의 반을 주고, 패널은 그 아래에서 스크롤한다.
+     이 묶음은 스타일 맨 끝에 둔다 — 앞에 두면 뒤에 오는 같은 굵기의
+     규칙(#rightpanel 폭 등)에 밀려 아무 일도 일어나지 않는다. */
+  @media (max-width:760px){
+    body{flex-direction:column}
+    #map,#diagram,#diagram2d{order:-1;flex:0 0 52vh;min-height:52vh}
+    #side{width:auto;flex:1 1 auto;min-height:0;
+          border-right:0;border-top:1px solid var(--line)}
+    #sidegrip{display:none}                  /* 끌 것이 없다 */
+    #rightpanel{width:168px;right:6px;top:6px}
+    .rp-body{max-height:30vh;padding:0 8px 8px}
+    .rp-base{grid-template-columns:1fr 1fr;gap:3px}
+    .rp-base button{padding:5px 0;font-size:10px}
+    .rp-head{padding:7px 8px}
+    .legend{display:none}                    /* 좁은 화면에서는 지도를 가린다 */
+    .pickmenu{min-width:150px}
+  }
+</style>
+</head>
+<body>
+
+<div id="side">
+  <!-- 제목은 탭을 옮길 때 통째로 다시 쓰인다. 프리셋을 그 안에 두면 같이 지워진다. -->
+  <div class="titlebar">
+    <h1 id="apptitle">사이트 분석<small>브이월드 + 건축물대장</small></h1>
+    <!-- 잡아 놓은 상태를 통째로 담아 두는 다섯 칸. 눌러서 되돌린다. -->
+    <span id="presets" class="presets"></span>
+    <span id="p2presets" class="presets" style="display:none"></span>
+    <span id="d3presets" class="presets" style="display:none"></span>
+  </div>
+
+  <div class="viewtabs">
+    <button class="vtab on" data-view="site">사이트 분석</button>
+    <button class="vtab"    data-view="diagram">다이어그램</button>
+  </div>
+
+  <div class="viewpane" id="pane-site">
+
+  <div class="sec" id="keysec">
+    <h2>내 인증키 <span id="keystate" class="dim"></span></h2>
+    <div id="keybox">
+      <div id="keywhy" class="hint" style="margin-bottom:10px"></div>
+      <label>브이월드 인증키 <span class="dim">vworld.kr</span></label>
+      <input id="k-vworld" placeholder="지적도·건물·항공사진에 씁니다" autocomplete="off">
+      <label>브이월드 등록 도메인</label>
+      <input id="k-domain" placeholder="http://localhost" autocomplete="off">
+      <label>공공데이터포털 서비스키 <span class="dim">data.go.kr · 건축물대장</span></label>
+      <input id="k-data" placeholder="일반 인증키(Decoding) 쪽" autocomplete="off">
+      <div class="row" style="margin-top:8px">
+        <button id="k-save" style="margin:0">저장</button>
+        <button class="ghost" id="k-clear" style="margin:0">지우기</button>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        키는 <b>이 브라우저에만</b> 저장되고 서버에 남지 않습니다.
+        발급은 각각 5분이면 됩니다 — 자세한 건
+        <a href="https://www.vworld.kr" target="_blank">vworld.kr</a> ·
+        <a href="https://www.data.go.kr/data/15134735/openapi.do" target="_blank">건축HUB</a>.
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" id="ctxsec">
+    <h2>01 CONTEXT <span class="dim">광역 분석 범위</span><span class="badge" id="ctx-badge"></span></h2>
+    <div class="tabs">
+      <button class="tab on" data-mode="addr">주소로</button>
+      <button class="tab"    data-mode="area">지도 영역으로</button>
+    </div>
+
+    <div id="mode-addr">
+      <div class="row" style="margin:0 0 2px">
+        <label style="margin:0">시 · 도</label>
+        <label style="margin:0">구</label>
+      </div>
+      <div class="row" style="margin:0">
+        <select id="a-sido" disabled><option>서울특별시</option></select>
+        <select id="a-gu"><option value="">— 선택 —</option></select>
+      </div>
+      <label>법정동</label>
+      <select id="a-dong"><option value="">구를 먼저 고르세요</option></select>
+      <label>번지 <span class="dim">비우면 동 중심</span></label>
+      <input id="a-bunji" placeholder="988 또는 988-1" autocomplete="off">
+      <div id="a-preview" class="hint" style="margin-top:8px">구 → 동을 고르세요.</div>
+      <label>범위 <span class="dim">반경 (m)</span></label>
+      <input id="radius" type="number" value="350" step="50">
+      <input id="addr" type="hidden">
+    </div>
+
+    <div id="mode-area" style="display:none">
+      <div class="row" style="margin:0">
+        <div class="ddwrap" id="a-ratio-dd" style="flex:1">
+          <button class="ghost dd" id="drawarea" style="margin:0">영역 그리기<span class="cap" id="a-ratio-lab">자유형</span></button>
+          <div class="ddmenu" id="a-ratio-menu">
+            <div class="ddsub">
+              <button type="button" class="ddparent">사각형</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="rect" data-r="0">자유형</button>
+                <button type="button" data-shape="rect" data-r="1">정사각형 1:1</button>
+                <button type="button" data-shape="rect" data-r="1.3333">가로 4:3</button>
+                <button type="button" data-shape="rect" data-r="0.75">세로 3:4</button>
+                <button type="button" data-shape="rect" data-r="1.5">가로 3:2</button>
+                <button type="button" data-shape="rect" data-r="0.6667">세로 2:3</button>
+                <button type="button" data-shape="rect" data-r="1.7778">가로 16:9</button>
+                <button type="button" data-shape="rect" data-r="1.4142">가로 A판 √2:1</button>
+                <button type="button" data-shape="rect" data-r="0.7071">세로 A판 1:√2</button>
+              </div>
+            </div>
+            <div class="ddsub">
+              <button type="button" class="ddparent">원</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="circle" data-r="0">자유형</button>
+                <button type="button" data-shape="circle" data-r="fixed">반경 지정…</button>
+              </div>
+            </div>
+          
+          </div>
+        </div>
+        <button class="ghost" id="drawpoly" style="margin:0">점 찍어 그리기</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="polyundo" style="margin:0" disabled>점 취소</button>
+        <button class="ghost" id="polyclear" style="margin:0" disabled>지우기</button>
+      </div>
+      <input type="hidden" id="a-ratio" value="0">
+      <input type="hidden" id="a-ratio-shape" value="rect">
+      <input type="hidden" id="a-ratio-cr" value="">
+      <label>반경 (m) — 비우면 그린 모양 그대로</label>
+      <input id="arearadius" type="number" step="50" placeholder="그린 모양 그대로">
+      <div id="areainfo" class="hint">CONTEXT 범위를 지도에서 끌어서 지정하거나,<br>
+        <b>점 찍어 그리기</b>로 경계를 따라 찍으세요.<br>
+        반경을 넣으면 <b>그린 도형의 중심</b>에서 그 반경만큼 잡습니다.<br>
+        한 변 5km 이내. 넓을수록 수집이 오래 걸립니다.</div>
+    </div>
+
+    <label>이름 (선택)</label>
+    <input id="nm" placeholder="자동">
+    <button id="go">분석 시작</button>
+    <div id="progwrap" style="display:none">
+      <div class="progbar"><div id="progfill"></div></div>
+      <div class="progtext"><span id="progphase">준비</span><b id="progpct">0%</b></div>
+    </div>
+
+    <div class="subhead">분석한 CONTEXT</div>
+    <div class="row">
+      <select id="sites" style="flex:3"></select>
+      <button class="ghost danger" id="del" style="flex:0 0 62px;margin:0"
+              title="이 CONTEXT 삭제">삭제</button>
+    </div>
+    <div id="stats" style="margin-top:10px"></div>
+  </div>
+
+  <div class="sec folded" id="psitebox">
+    <h2>02 PROJECT SITE <span class="dim">공모 대상지</span><span class="badge" id="ps-badge"></span></h2>
+    <div class="row" style="margin:0">
+      <div class="ddwrap" id="ps-ratio-dd" style="flex:1">
+          <button class="ghost dd" id="ps-rect" style="margin:0">영역 그리기<span class="cap" id="ps-ratio-lab">자유형</span></button>
+          <div class="ddmenu" id="ps-ratio-menu">
+            <div class="ddsub">
+              <button type="button" class="ddparent">사각형</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="rect" data-r="0">자유형</button>
+                <button type="button" data-shape="rect" data-r="1">정사각형 1:1</button>
+                <button type="button" data-shape="rect" data-r="1.3333">가로 4:3</button>
+                <button type="button" data-shape="rect" data-r="0.75">세로 3:4</button>
+                <button type="button" data-shape="rect" data-r="1.5">가로 3:2</button>
+                <button type="button" data-shape="rect" data-r="0.6667">세로 2:3</button>
+                <button type="button" data-shape="rect" data-r="1.7778">가로 16:9</button>
+                <button type="button" data-shape="rect" data-r="1.4142">가로 A판 √2:1</button>
+                <button type="button" data-shape="rect" data-r="0.7071">세로 A판 1:√2</button>
+              </div>
+            </div>
+            <div class="ddsub">
+              <button type="button" class="ddparent">원</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="circle" data-r="0">자유형</button>
+                <button type="button" data-shape="circle" data-r="fixed">반경 지정…</button>
+              </div>
+            </div>
+          
+          </div>
+        </div>
+      <button class="ghost" id="ps-poly" style="margin:0">점 찍어 그리기</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="ps-undo" style="margin:0" disabled>점 취소</button>
+      <button class="ghost" id="ps-clear" style="margin:0" disabled>지우기</button>
+    </div>
+    <input type="hidden" id="ps-ratio" value="0">
+      <input type="hidden" id="ps-ratio-shape" value="rect">
+      <input type="hidden" id="ps-ratio-cr" value="">
+    <div id="ps-info" class="hint">공모가 지정한 대상지 경계를 직접 그리세요.<br>
+      이 경계로 도면의 모든 객체가 잘려 <b>닫힌 도형</b>이 됩니다.<br>
+      안 그리면 CONTEXT 수집범위 전체가 기준이 됩니다.</div>
+    <!-- 그린 선은 필지를 가로지른다. 필지 경계를 따라가게 맞춰 주는 자리. -->
+    <div class="row" style="margin-top:7px">
+      <button class="ghost" id="ps-snap" style="margin:0"
+        title="경계 안에 든 필지를 찾아 그 바깥선으로 경계를 다시 그립니다">필지에 맞추기</button>
+      <button class="ghost" id="ps-add" style="margin:0"
+        title="지도에서 필지를 눌러 경계에 넣습니다">필지 추가</button>
+      <button class="ghost" id="ps-sub" style="margin:0"
+        title="지도에서 필지를 눌러 경계에서 뺍니다">제거</button>
+    </div>
+    <div id="ps-snapinfo" class="hint" style="margin-top:6px"></div>
+    <button id="ps-apply" disabled>이 경계로 확정</button>
+  </div>
+
+  <!-- 필터는 오른쪽 레이어 패널 안, 각 레이어 줄 밑에 있다. 여기서 찾지 말 것. -->
+
+  <div class="sec folded" id="selbox">
+    <h2>03 DESIGN AREA <span class="dim">설계 범위</span><span class="badge" id="ds-badge"></span></h2>
+    <div class="row" style="margin:0">
+      <div class="ddwrap" id="ds-ratio-dd" style="flex:1">
+        <button class="ghost dd" id="boxsel" style="margin:0">영역 선택<span class="cap" id="ds-ratio-lab">자유형</span></button>
+        <div class="ddmenu" id="ds-ratio-menu">
+            <div class="ddsub">
+              <button type="button" class="ddparent">사각형</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="rect" data-r="0">자유형</button>
+                <button type="button" data-shape="rect" data-r="1">정사각형 1:1</button>
+                <button type="button" data-shape="rect" data-r="1.3333">가로 4:3</button>
+                <button type="button" data-shape="rect" data-r="0.75">세로 3:4</button>
+                <button type="button" data-shape="rect" data-r="1.5">가로 3:2</button>
+                <button type="button" data-shape="rect" data-r="0.6667">세로 2:3</button>
+                <button type="button" data-shape="rect" data-r="1.7778">가로 16:9</button>
+                <button type="button" data-shape="rect" data-r="1.4142">가로 A판 √2:1</button>
+                <button type="button" data-shape="rect" data-r="0.7071">세로 A판 1:√2</button>
+              </div>
+            </div>
+            <div class="ddsub">
+              <button type="button" class="ddparent">원</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="circle" data-r="0">자유형</button>
+                <button type="button" data-shape="circle" data-r="fixed">반경 지정…</button>
+              </div>
+            </div>
+          
+        </div>
+      </div>
+      <button class="ghost" id="dspoly" style="margin:0">점 찍어 선택</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="dsundo" style="margin:0" disabled>점 취소</button>
+      <button class="ghost" id="clearsel" style="margin:0">선택 해제</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="ds-add" style="margin:0"
+        title="지도에서 필지나 건물을 눌러 DESIGN AREA에 넣습니다">필지 추가</button>
+      <button class="ghost" id="ds-sub" style="margin:0"
+        title="지도에서 필지나 건물을 눌러 DESIGN AREA에서 뺍니다">필지 제거</button>
+    </div>
+    <input type="hidden" id="ds-ratio" value="0">
+      <input type="hidden" id="ds-ratio-shape" value="rect">
+      <input type="hidden" id="ds-ratio-cr" value="">
+    <div id="ds-info" class="hint">그린 영역 <b>안에 온전히 들어온 필지만</b> 선택됩니다.
+      경계에 걸친 필지는 빠집니다.<br><br>
+      <b>여러 번 그리면 계속 더해집니다.</b><br>
+      <b>Ctrl</b> 을 누른 채 그리면 그만큼 <b>빼냅니다</b>.<br>
+      「필지 추가·제거」를 켜고 필지·건물을 눌러 하나씩 다듬을 수도 있습니다.<br>
+      끝내려면 <b>Esc</b> 또는 버튼을 다시 누르세요.</div>
+    <div id="picked"></div>
+    <div id="selcnt"></div>
+    <button id="ds-apply" disabled>이 범위로 확정</button>
+  </div>
+
+  <div class="sec folded" id="outbox">
+    <h2>04 내보내기 <span class="dim">DXF</span></h2>
+
+    <label>어디까지 내보낼까요</label>
+    <div class="pickrow" id="ex-scope">
+      <button class="ghost on" data-scope="context">01 CONTEXT<span>수집 범위 전체</span></button>
+      <button class="ghost"    data-scope="project">02 PROJECT SITE<span>확정한 경계</span></button>
+      <button class="ghost"    data-scope="design">03 DESIGN AREA<span>고른 필지만</span></button>
+      <button class="ghost"    data-scope="area">따로 지정<span>아래에서 그리기</span></button>
+    </div>
+
+    <div id="ex-areabox" style="display:none">
+      <div class="row" style="margin:8px 0 0">
+        <div class="ddwrap" id="ex-ratio-dd" style="flex:1">
+          <button class="ghost dd" id="ex-rect" style="margin:0">영역 그리기<span class="cap" id="ex-ratio-lab">자유형</span></button>
+          <div class="ddmenu" id="ex-ratio-menu">
+            <div class="ddsub">
+              <button type="button" class="ddparent">사각형</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="rect" data-r="0">자유형</button>
+                <button type="button" data-shape="rect" data-r="1">정사각형 1:1</button>
+                <button type="button" data-shape="rect" data-r="1.3333">가로 4:3</button>
+                <button type="button" data-shape="rect" data-r="0.75">세로 3:4</button>
+                <button type="button" data-shape="rect" data-r="1.5">가로 3:2</button>
+                <button type="button" data-shape="rect" data-r="0.6667">세로 2:3</button>
+                <button type="button" data-shape="rect" data-r="1.7778">가로 16:9</button>
+                <button type="button" data-shape="rect" data-r="1.4142">가로 A판 √2:1</button>
+                <button type="button" data-shape="rect" data-r="0.7071">세로 A판 1:√2</button>
+              </div>
+            </div>
+            <div class="ddsub">
+              <button type="button" class="ddparent">원</button>
+              <div class="ddflyout">
+                <button type="button" data-shape="circle" data-r="0">자유형</button>
+                <button type="button" data-shape="circle" data-r="fixed">반경 지정…</button>
+              </div>
+            </div>
+          
+          </div>
+        </div>
+        <button class="ghost" id="ex-poly" style="margin:0">점 찍기</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="ex-undo" style="margin:0" disabled>점 취소</button>
+        <button class="ghost" id="ex-clear" style="margin:0" disabled>지우기</button>
+      </div>
+      <input type="hidden" id="ex-ratio" value="0">
+      <input type="hidden" id="ex-ratio-shape" value="rect">
+      <input type="hidden" id="ex-ratio-cr" value="">
+      <div id="ex-info" class="hint">내보낼 범위를 지도에서 그리세요.</div>
+    </div>
+
+    <button id="ex-go">DXF 받기</button>
+    <div id="terrainnote" style="display:none"></div>
+  </div>
+
+  <div class="sec" id="psbox">
+    <h2>05 프리셋 <span class="dim">담기·주고받기</span></h2>
+    <div class="hint">01~04 를 통째로 담습니다. 되돌리기는 <b>제목 옆 번호</b>를 누르세요.</div>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" id="ps-save" style="margin:0">프리셋 설정</button>
+      <button class="ghost danger" id="ps-delete" style="margin:0">프리셋 삭제</button>
+    </div>
+    <div id="ps-slots" class="hint" style="display:none;margin-top:7px"></div>
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="ps-export" style="margin:0">내보내기</button>
+      <button class="ghost" id="ps-import" style="margin:0">가져오기</button>
+    </div>
+    <input type="file" id="ps-file" accept=".json,application/json" style="display:none">
+  </div>
+
+  <div id="log">주소를 넣고 «분석 시작»을 누르거나,
+아래에서 이미 분석한 대상지를 고르세요.</div>
+
+  <div class="sec verbox">
+    <div class="verline">
+      <span id="ver">버전 확인 중…</span>
+      <button class="ghost tiny" id="vercheck">업데이트 확인</button>
+    </div>
+    <div id="vernote" class="hint" style="display:none"></div>
+  </div>
+  </div><!-- /pane-site -->
+
+  <div class="viewpane" id="pane-diagram" style="display:none">
+
+    <div class="subtabs">
+      <button class="stab on" data-sub="2d">2D</button>
+      <button class="stab"    data-sub="3d">3D</button>
+    </div>
+
+    <div id="sub-3d" style="display:none">
+    <div class="sec" id="d3-view-sec">
+      <h2>뷰</h2>
+      <div class="d3-view-actions">
+        <button class="ghost" id="dg-fit">화면 맞춤</button>
+        <button class="ghost" id="dg-reset">뷰 초기화</button>
+      </div>
+      <label>앙각 <b id="dg-elv">32°</b></label>
+      <input id="dg-el" type="range" min="2" max="90" value="32">
+      <div class="d3-view-head">
+        <span>저장된 뷰</span>
+        <button class="ghost" id="d3view-save">현재 뷰 저장</button>
+      </div>
+      <div id="d3view-note" class="d3-view-note">현재 뷰를 저장하면 아래 목록에 추가됩니다.</div>
+      <div id="d3views" class="d3-view-grid"></div>
+    </div>
+
+    <div class="sec" id="d3-section-sec">
+      <h2>단면</h2>
+      <div class="d3-section-tool">
+        <label class="d3-section-toggle"><input id="dg-section-on" type="checkbox"> 단면 활성화</label>
+        <div id="dg-section-controls" class="d3-section-controls" hidden>
+          <label><span>절단 위치</span><input id="dg-section-position" type="range" min="-100" max="100" step="1" value="0"><b id="dg-section-position-v">0 m</b></label>
+          <label><span>절단 각도</span><input id="dg-section-angle" type="range" min="0" max="359" step="1" value="35"><b id="dg-section-angle-v">35°</b></label>
+          <label><span>절단면 색</span><input id="dg-section-color" type="color" value="#b96d45"><span></span></label>
+          <div class="d3-section-actions">
+            <button class="ghost" id="dg-section-align">현재 뷰 방향 적용</button>
+            <button class="ghost" id="dg-section-focus">DESIGN AREA 앞에 맞춤</button>
+          </div>
+          <div class="hint">지형과 대지만 자릅니다. 앞쪽 CONTEXT 건물은 통째로 숨기고 DESIGN AREA 건물은 보존합니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec" id="d3-layer-sec">
+      <h2>레이어</h2>
+      <div class="lyr lyr-head">
+        <span></span><span></span><span>이름</span><span>채우기</span><span>선</span>
+        <span></span><span>굵기</span><span>투명</span>
+      </div>
+      <div id="dglayers"></div>
+    </div>
+
+    <div class="sec" id="d3-export-sec">
+      <h2>내보내기</h2>
+      <button id="dg-go">내보내기</button>
+    </div>
+
+    <div class="sec" id="d3-preset-sec">
+      <h2>3D 프리셋 <span class="dim">담기·주고받기</span></h2>
+      <div class="hint">건물·지형·해·레이어·내보내기 설정을 담습니다. 현재 뷰는 유지됩니다.
+        되돌리기는 <b>제목 옆 번호</b>를 누르세요.</div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="d3ps-save" style="margin:0">프리셋 설정</button>
+        <button class="ghost danger" id="d3ps-delete" style="margin:0">프리셋 삭제</button>
+      </div>
+      <div id="d3ps-slots" class="hint" style="display:none;margin-top:7px"></div>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="d3ps-export" style="margin:0">내보내기</button>
+        <button class="ghost" id="d3ps-import" style="margin:0">가져오기</button>
+      </div>
+      <input type="file" id="d3ps-file" accept=".json,application/json" style="display:none">
+      <div class="note" style="margin-top:10px">
+        높이는 <b>층수 × 층고로 추정한 매스</b>입니다. 실측 높이가 아닙니다.
+        「사이트 분석」에서 고른 부지는 여기서도 붉게 표시됩니다.
+      </div>
+    </div>
+    </div><!-- /sub-3d -->
+
+    <div id="sub-2d">
+      <div class="sec">
+        <h2>레이어</h2>
+        <div class="lyr lyr-head">
+          <span></span><span></span><span>이름</span><span>채우기</span><span>선</span>
+          <span>종류</span><span>굵기</span><span>투명</span>
+        </div>
+        <div id="p2layers"></div>
+      </div>
+
+      <!-- 도판을 꾸미는 것들. 자료가 아니라 표현이다. -->
+      <div class="sec">
+        <h2>디자인</h2>
+
+        <label class="dztoggle"><input type="checkbox" id="dz-grid"> 그리드</label>
+        <div class="dzbox" id="dz-grid-box" style="display:none">
+          <div class="row">
+            <label style="flex:1">배치 기준<select id="dz-grid-mode">
+              <option value="step">간격으로</option><option value="count">CONTEXT 전체 칸 수</option>
+            </select></label>
+            <label style="flex:1" id="dz-grid-step-wrap">간격 m<input type="number" id="dz-grid-step" value="50"
+              min="1" max="1000" step="5"></label>
+            <label style="flex:1">굵기<input type="number" id="dz-grid-w" value="0.4"
+              min="0" max="4" step="0.1"></label>
+          </div>
+          <div class="row" id="dz-grid-count-row" style="display:none">
+            <label style="flex:1">가로 칸<input type="number" id="dz-grid-cols" value="10"
+              min="1" max="200" step="1"></label>
+            <label style="flex:1">세로 칸<input type="number" id="dz-grid-rows" value="10"
+              min="1" max="200" step="1"></label>
+          </div>
+          <div class="hint" id="dz-grid-summary"></div>
+          <div class="row" id="dz-grid-offset-row">
+            <label class="cwrap">색<input type="color" id="dz-grid-color" value="#9aa3b2"></label>
+            <label style="flex:1">투명 %<input type="number" id="dz-grid-op" value="35"
+              min="0" max="100" step="5"></label>
+            <select id="dz-grid-ls" class="lyr-ls" style="flex:0 0 62px"></select>
+          </div>
+          <div class="row">
+            <label>동으로 m<input type="number" id="dz-grid-dx" value="0" step="5"></label>
+            <label>북으로 m<input type="number" id="dz-grid-dy" value="0" step="5"></label>
+          </div>
+        </div>
+
+        <label class="dztoggle"><input type="checkbox" id="dz-vig"> 비네트</label>
+        <div class="dzbox" id="dz-vig-box" style="display:none">
+          <div class="row">
+            <select id="dz-vig-shape" style="flex:1">
+              <option value="ellipse">타원</option>
+              <option value="circle">원</option>
+              <option value="rect">사각형</option>
+            </select>
+            <label class="cwrap">색<input type="color" id="dz-vig-color" value="#0e1013"></label>
+            <label style="flex:1">진하기 %<input type="number" id="dz-vig-op" value="55"
+              min="0" max="100" step="5"></label>
+          </div>
+          <div class="row">
+            <label>가로 반경 m<input type="number" id="dz-vig-rx" value="0"
+              min="0" max="5000" step="10" title="0 이면 수집 반경의 60%"></label>
+            <label>세로 반경 m<input type="number" id="dz-vig-ry" value="0"
+              min="0" max="5000" step="10"></label>
+            <label>번짐 %<input type="number" id="dz-vig-feather" value="45"
+              min="0" max="100" step="5"></label>
+          </div>
+          <div class="row">
+            <button class="ghost" id="dz-vig-pick" style="margin:0"
+              title="도판에서 중심을 누른 채 끌면 크기까지 잡힙니다">중심·크기 잡기</button>
+            <button class="ghost" id="dz-vig-fit" style="margin:0"
+              title="DESIGN AREA 한가운데로, 반경도 그 범위에">범위에 맞춤</button>
+            <button class="ghost" id="dz-vig-center" style="margin:0"
+              title="대상지 한가운데로">가운데</button>
+          </div>
+          <div class="hint" id="dz-vig-at" style="margin-top:5px"></div>
+        </div>
+
+        <label class="dztoggle"><input type="checkbox" id="dz-shadow"> 건물 그림자</label>
+        <div class="dzbox" id="dz-shadow-box" style="display:none">
+          <div class="row">
+            <label class="cwrap">색<input type="color" id="dz-sh-color" value="#26303c"></label>
+            <label style="flex:1">진하기 %<input type="number" id="dz-sh-op" value="35"
+              min="0" max="100" step="5"></label>
+            <label style="flex:1">번짐<input type="number" id="dz-sh-blur" value="4"
+              min="0" max="40" step="1"></label>
+          </div>
+          <div class="row">
+            <label style="flex:1">방향 °<input type="number" id="dz-sh-angle" value="135"
+              min="0" max="360" step="5"></label>
+            <label style="flex:1">거리<input type="number" id="dz-sh-dist" value="3"
+              min="0" max="40" step="1"></label>
+          </div>
+        </div>
+
+        <label class="dztoggle"><input type="checkbox" id="dz-noise"> 노이즈 추가</label>
+        <div class="dzbox" id="dz-noise-box" style="display:none">
+          <div class="row">
+            <label style="flex:1">양(Amount) %<input type="number" id="dz-noise-amount" value="5"
+              min="0" max="400" step="0.1" inputmode="decimal"></label>
+            <label style="flex:1">분포<select id="dz-noise-distribution">
+              <option value="uniform">균등 (Uniform)</option>
+              <option value="gaussian" selected>가우시안 (Gaussian)</option>
+            </select></label>
+          </div>
+          <label class="dztoggle" style="margin:6px 0 3px">
+            <input type="checkbox" id="dz-noise-monochromatic" checked> 단색 (Monochromatic)
+          </label>
+          <div class="hint">Photoshop의 필터 → 노이즈 → 노이즈 추가와 같은 방식으로
+            완성된 도판의 픽셀 색상값에 노이즈를 적용합니다.</div>
+        </div>
+
+      </div>
+
+      <!-- 내보내기는 맨 아래. 사이트 분석의 04 와 같은 자리다. -->
+      <div class="sec">
+        <h2>내보내기</h2>
+        <button id="p2-go">내보내기</button>
+      </div>
+
+      <div class="sec">
+        <h2>도판 프리셋 <span class="dim">담기·주고받기</span></h2>
+        <div class="hint">레이어·조건·디자인을 통째로 담습니다. 대상지와는 별개라
+          어느 대상지에나 씌울 수 있습니다.<br>되돌리기는 <b>제목 옆 번호</b>를 누르세요.</div>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" id="p2ps-save" style="margin:0">프리셋 설정</button>
+          <button class="ghost danger" id="p2ps-delete" style="margin:0">프리셋 삭제</button>
+        </div>
+        <div id="p2ps-slots" class="hint" style="display:none;margin-top:7px"></div>
+        <div class="row" style="margin-top:6px">
+          <button class="ghost" id="p2ps-export" style="margin:0">내보내기</button>
+          <button class="ghost" id="p2ps-import" style="margin:0">가져오기</button>
+        </div>
+        <input type="file" id="p2ps-file" accept=".json,application/json" style="display:none">
+      </div>
+    </div>
+  </div><!-- /pane-diagram -->
+</div>
+
+
+<!-- 3D 다이어그램 내보내기 -->
+<div id="dgmodal" class="modal" style="display:none">
+  <div class="modal-box wide">
+    <h3>3D 다이어그램을 어떻게 내보낼까요</h3>
+    <div class="modal-note" id="dgm-scope"></div>
+    <div class="excols">
+      <div>
+        <label>파일 형식</label>
+        <div class="pickrow" id="dgm-fmt">
+          <button type="button" class="ghost on" data-fmt="png">PNG<span>그림 한 장</span></button>
+          <button type="button" class="ghost" data-fmt="svg">SVG<span>벡터 다이어그램</span></button>
+          <button type="button" class="ghost" data-fmt="aizip">AI 레이어 ZIP<span>Illustrator 자동 분리</span></button>
+          <button type="button" class="ghost" data-fmt="glb">GLB<span>건물별 닫힌 메시</span></button>
+          <button type="button" class="ghost" data-fmt="3dm">3DM<span>Rhino 폴리서피스</span></button>
+        </div>
+        <label style="margin-top:10px">배율 (PNG)</label>
+        <select id="dgm-scale">
+          <option value="1">1× — 화면 크기</option>
+          <option value="2" selected>2×</option>
+          <option value="3">3×</option><option value="4">4×</option>
+        </select>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost" id="dgm-fit" style="margin:0">화면 맞춤</button>
+          <button class="ghost" id="dgm-crop" style="margin:0">범위 지정</button>
+          <button class="ghost" id="dgm-cropoff" style="margin:0" disabled>범위 해제</button>
+        </div>
+        <div id="dgcropinfo" class="hint" style="margin-top:7px"></div>
+        <label style="margin-top:14px">렌더링</label>
+        <div class="render-pills" id="dg-render-modes">
+          <button type="button" data-render-mode="diagram" class="on">다이어그램</button>
+          <button type="button" data-render-mode="aerial">위성 매핑</button>
+          <button type="button" id="dg-nano-open">나노바나나</button>
+        </div>
+        <label class="onoff" style="margin-top:10px"><input type="checkbox" id="dg-outline" checked> 외곽선</label>
+        <label>렌더 품질</label>
+        <select id="dg-quality">
+          <option value="standard">빠르게 · 0.75× · 512 그림자</option>
+          <option value="high" selected>높음 · 화면 해상도 · 2K 그림자</option>
+          <option value="final">최종 · 2× · 4K 그림자</option>
+        </select>
+        <div class="note" id="dg-render-note" style="margin-top:8px">WebGL 렌더러 준비 중…</div>
+      </div>
+      <div>
+        <canvas id="dgm-canvas" width="380" height="380"></canvas>
+        <div class="exhint" id="dgm-hint"></div>
+      </div>
+    </div>
+    <div class="modal-row" style="margin-top:14px">
+      <button class="ghost" id="dgm-cancel">취소</button>
+      <button id="dgm-go">내보내기</button>
+    </div>
+  </div>
+</div>
+
+<!-- Nano Banana 사진 렌더링 -->
+<div id="dgnanomodal" class="modal" style="display:none">
+  <div class="modal-box nano-wide">
+    <h3>Nano Banana 사진 렌더링</h3>
+    <div class="modal-note">현재 카메라와 크롭 구도를 입력 이미지로 사용합니다.</div>
+    <div class="nano-cols">
+      <div class="nano-preview"><img id="dgn-preview" alt="Nano Banana 렌더 미리보기"></div>
+      <div class="nano-controls">
+        <div class="nano-location">
+          <span>대상지</span>
+          <strong id="dgn-site-name">대상지</strong>
+          <small id="dgn-site-address"></small>
+        </div>
+        <label for="dgn-prompt">렌더링 프롬프트</label>
+        <textarea id="dgn-prompt" maxlength="6000"></textarea>
+        <div class="hint" id="dgn-status">현재 뷰를 준비하는 중…</div>
+        <button type="button" id="dgn-render">렌더링 하기</button>
+        <button type="button" class="ghost" id="dgn-download" disabled>결과 PNG 저장</button>
+      </div>
+    </div>
+    <div class="modal-row" style="margin-top:14px">
+      <button type="button" class="ghost" id="dgn-cancel">내보내기로 돌아가기</button>
+    </div>
+  </div>
+</div>
+
+<!-- DESIGN AREA 사용자 모델 배치 -->
+<div id="dgplacemodal" class="modal" style="display:none">
+  <div class="modal-box wide">
+    <h3 id="dgp-title">가져온 모델 배치</h3>
+    <div class="modal-note" id="dgp-name"></div>
+    <div class="dgp-cols">
+      <div>
+        <canvas id="dgp-canvas" width="640" height="480"></canvas>
+        <div class="exhint" style="margin-top:6px">붉은 실제 바닥면의 면적 중심을 끌어 DESIGN AREA 안에 놓으세요. 영역 밖으로 끌면 가장 가까운 경계에 붙습니다.</div>
+      </div>
+      <div class="dgp-controls">
+        <div class="hint" id="dgp-size"></div>
+        <label>바닥 면적 중심 X (m)<input type="number" data-dgp-k="x" step="0.1"></label>
+        <label>바닥 면적 중심 Y (m)<input type="number" data-dgp-k="y" step="0.1"></label>
+        <label>회전 (°)<input type="number" data-dgp-k="rotation" min="-360" max="360" step="1"></label>
+        <label>크기 배율<input type="number" data-dgp-k="scale" min="0.0001" step="0.01"></label>
+        <label>지면 위 높이 (m)<input type="number" data-dgp-k="zOffset" step="0.1"></label>
+        <button type="button" class="ghost" id="dgp-reset">선택 건물 중심으로 초기화</button>
+      </div>
+    </div>
+    <div class="modal-row">
+      <button class="ghost danger" id="dgp-remove" hidden>파일 모델 삭제</button>
+      <span style="flex:1"></span>
+      <button class="ghost" id="dgp-cancel">취소</button>
+      <button id="dgp-apply">이 위치에 넣기</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- 2D 도판 내보내기 — 사이트 분석의 04 와 같은 짜임 -->
+<div id="p2modal" class="modal" style="display:none">
+  <div class="modal-box wide">
+    <h3>도판을 어떻게 내보낼까요</h3>
+    <div class="modal-note" id="p2m-scope"></div>
+    <div class="excols">
+      <div>
+        <label>파일 형식</label>
+        <div class="pickrow" id="p2m-fmt">
+          <button type="button" class="ghost on" data-fmt="png">PNG<span>그림 한 장</span></button>
+          <button type="button" class="ghost" data-fmt="svg">SVG<span>레이어별로 나뉜 벡터</span></button>
+          <button type="button" class="ghost" data-fmt="aizip">AI 레이어 ZIP<span>Illustrator 자동 분리</span></button>
+        </div>
+        <label style="margin-top:10px">배율 (PNG)</label>
+        <select id="p2m-scale">
+          <option value="1">1× — 화면 크기</option>
+          <option value="2" selected>2×</option>
+          <option value="3">3×</option><option value="4">4×</option>
+        </select>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost" id="p2m-fit"     style="margin:0">화면 맞춤</button>
+          <button class="ghost" id="p2m-crop"    style="margin:0">범위 지정</button>
+          <button class="ghost" id="p2m-cropoff" style="margin:0" disabled>범위 해제</button>
+        </div>
+        <label style="margin-top:10px">영역만 크롭해서 내보내기</label>
+        <div class="pickrow scope3" id="p2m-area">
+          <button type="button" class="ghost" data-scope="context">01 CONTEXT<span>수집 범위 크롭</span></button>
+          <button type="button" class="ghost" data-scope="project">02 PROJECT SITE<span>경계 외곽 크롭</span></button>
+          <button type="button" class="ghost" data-scope="design">03 DESIGN AREA<span>필지 외곽 크롭</span></button>
+        </div>
+        <div id="p2cropinfo" class="hint" style="margin-top:7px"></div>
+        <label class="onoff" style="margin-top:8px;justify-content:flex-start;gap:8px">
+          <input type="checkbox" id="p2m-bgnone" style="width:auto;flex:none">
+          <span>바탕 없이 — 투명하게</span></label>
+      </div>
+      <div>
+        <canvas id="p2m-canvas" width="380" height="380"></canvas>
+        <div class="exhint" id="p2m-hint"></div>
+      </div>
+    </div>
+    <div class="modal-row" style="margin-top:14px">
+      <button class="ghost" id="p2m-cancel">취소</button>
+      <button id="p2m-go">내보내기</button>
+    </div>
+  </div>
+</div>
+
+<div id="exmodal" class="modal" style="display:none">
+  <div class="modal-box wide">
+    <h3>무엇을 내보낼까요</h3>
+    <div class="modal-note" id="exm-scope"></div>
+    <div class="excols">
+    <div class="exlist" id="exm-layers">
+      <label><input type="checkbox" data-l="parcel" checked> 지적도 <span>필지 경계·지번</span></label>
+      <label><input type="checkbox" data-l="bldg" checked> 건물 <span>외곽선·층수·구조</span></label>
+      <label><input type="checkbox" data-l="road" checked> 도로 <span>도로명주소 도로</span></label>
+      <label><input type="checkbox" data-l="zone"> 용도지역 <span>도시지역</span></label>
+      <label><input type="checkbox" data-l="district"> 지구단위계획구역</label>
+      <label><input type="checkbox" data-l="planroad"> 도시계획도로 <span>대로·중로·소로</span></label>
+      <label><input type="checkbox" data-l="terrain" checked> 지형 <span>등고선·표고점 (별도 파일)</span></label>
+    </div>
+    <div class="expreview">
+      <canvas id="exm-canvas" width="380" height="380"></canvas>
+      <div class="exhint" id="exm-hint"></div>
+    </div>
+    </div>
+    <div class="modal-row">
+      <button class="ghost" id="exm-cancel">취소</button>
+      <button id="exm-ok">내보내기</button>
+    </div>
+  </div>
+</div>
+
+
+<div id="rightpanel">
+  <div class="rp-head" id="rp-toggle">레이어 <span class="dim" id="rp-sum"></span><i>▾</i></div>
+  <div class="rp-body">
+    <div class="rp-base">
+      <button type="button" class="on" data-base="base">일반지도</button>
+      <button type="button" data-base="sat">항공사진</button>
+    </div>
+    <label class="rp-row"><input type="checkbox" id="L-hyb"> 라벨</label>
+    <label class="rp-row"><input type="checkbox" id="L-extent" checked> 수집범위 (CONTEXT)</label>
+
+    <div class="rp-group">
+      <input type="checkbox" class="rp-expcb" id="exp-bldg">
+      <div class="rp-row">
+        <label><input type="checkbox" id="L-bldg" checked> 건물</label>
+        <label class="rp-exp" for="exp-bldg" title="건물 필터 펴기·접기">▾</label>
+      </div>
+      <div class="rp-slot" id="slot-bldg">
+        <p class="rp-note">대상지를 고르면 아래 칸이 채워집니다.</p>
+        <div class="sec" id="bfilterbox">
+          <h2>건물 필터 <span id="bcount"></span></h2>
+          <label>구조</label>
+          <select id="f-strct"></select>
+          <label>주용도</label>
+          <select id="f-purps"></select>
+          <label>사용승인 연도</label>
+          <div class="row">
+            <input id="f-ymin" type="number" placeholder="예 1930"><input id="f-ymax" type="number" placeholder="예 1975">
+          </div>
+          <label>지상층수</label>
+          <div class="row">
+            <input id="f-fmin" type="number" placeholder="최소"><input id="f-fmax" type="number" placeholder="최대">
+          </div>
+          <div class="checks">
+            <label><input type="checkbox" id="f-hide"> 필터 밖 숨기기</label>
+          </div>
+          <button class="ghost" id="f-pick">필터 결과를 DESIGN AREA 로</button>
+          <button class="ghost" id="f-reset-bldg">건물 필터 초기화</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="rp-group">
+      <input type="checkbox" class="rp-expcb" id="exp-parcel">
+      <div class="rp-row">
+        <label><input type="checkbox" id="L-parcel" checked> 필지</label>
+        <label class="rp-exp" for="exp-parcel" title="필지 필터 펴기·접기">▾</label>
+      </div>
+      <div class="rp-slot" id="slot-parcel">
+        <p class="rp-note">대상지를 고르면 아래 칸이 채워집니다.</p>
+        <div class="sec" id="filterbox">
+          <h2>필지 필터 <span id="fcount"></span></h2>
+          <div class="row">
+            <div><label>지목</label><select id="f-jimok"></select></div>
+            <div><label>대장건수</label>
+              <select id="f-cnt">
+                <option value="">전체</option>
+                <option value="1">1건 — 단독</option>
+                <option value="2+">2건 이상 — 집합</option>
+                <option value="0">없음 — 나대지</option>
+              </select>
+            </div>
+          </div>
+          <label>용도지역</label>
+          <select id="f-zone"></select>
+          <label>지구단위계획구역</label>
+          <select id="f-district"></select>
+          <label>대지면적 (m²)</label>
+          <div class="row">
+            <input id="f-amin" type="number" placeholder="최소"><input id="f-amax" type="number" placeholder="최대">
+          </div>
+          <button class="ghost" id="f-reset-parcel">필지 필터 초기화</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="rp-grip" id="rp-grip" title="끌어서 높이 조절 · 두 번 누르면 기본값"></div>
+</div>
+
+<!-- 건물과 필지가 겹친 자리를 눌렀을 때 커서 옆에 뜨는 선택지 -->
+<div id="pickmenu" class="pickmenu" style="display:none"></div>
+
+<div id="sidegrip" title="끌어서 패널 폭 조절 · 두 번 누르면 기본값"></div>
+<div id="map"></div>
+<div id="diagram" style="display:none">
+  <canvas id="dgwebgl"></canvas>
+  <canvas id="dgcanvas"></canvas>
+  <div id="dginfo" class="p2info dginfo">대상지를 먼저 고르세요.</div>
+</div>
+<div id="diagram2d" style="display:none">
+  <canvas id="p2canvas"></canvas>
+  <!-- 도판 왼쪽 위 정보. 화면에만 뜨고 내보낼 때는 빠진다. -->
+  <div id="p2info" class="p2info"></div>
+</div>
+<div class="legend">
+  <div><i style="background:#cfe6d8;border:1px solid #2f6f4e"></i> 건물</div>
+  <div><i style="background:transparent;border:1px solid #9aa3b2"></i> 필지</div>
+  <div><i style="background:rgba(224,176,136,.25);border:1px solid #e0b088"></i> 필터 통과</div>
+  <div><i style="background:rgba(226,86,74,.35);border:2px solid #e2564a"></i> 선택</div>
+</div>
+
+<div id="site-change-overlay" class="site-change-overlay" aria-hidden="true">
+  <div class="site-change-card" role="status" aria-live="polite" aria-atomic="true">
+    <div class="site-change-spinner" aria-hidden="true"></div>
+    <h3 id="site-change-title">대지 변경 중…</h3>
+    <p id="site-change-phase">사이트 분석의 변경 내용을 다이어그램에 반영하고 있습니다.</p>
+    <div class="site-change-track" aria-hidden="true"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/draw.js?v=20260817-1"></script>
+<script src="/presets.js"></script>
+<script src="/requests.js"></script>
+<script src="/diagram.js?v=20260908-6"></script>
+<script src="/plan2d.js?v=20260831-2"></script>
+<script>
+const Q = s => document.querySelector(s);
+const esc = value => DRAW.esc(value);
+
+// 브라우저 저장소는 없는 셈 치고 쓴다.
+// 엣지의 추적 방지가 켜져 있으면 localStorage 를 건드리는 순간 예외가 난다.
+// 감싸지 않은 줄이 하나라도 있으면 거기서 스크립트가 끊겨, 그 뒤의 단추가 통째로 죽는다.
+const LS = {
+  get(k, dflt = null){ try{ const v = localStorage.getItem(k); return v === null ? dflt : v; }
+                       catch(e){ return dflt; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch(e){} },
+  del(k){ try{ localStorage.removeItem(k); }catch(e){} },
+};
+
+// ───────────────────────────────────────── 내 인증키
+//
+// 이 브라우저에만 담아 두고, 요청 머리에 실어 보낸다. 서버는 저장하지 않는다.
+// 그래서 친구가 자기 키로 자기 대상지를 만들고 지울 수 있다.
+const KEYS = "siteanalysis.keys";
+let myKeys = {};
+try { myKeys = JSON.parse(LS.get(KEYS)) || {}; } catch(e) { myKeys = {}; }
+
+function keyHeaders(){
+  const h = {};
+  if(myKeys.vworld) h["X-VWorld-Key"] = myKeys.vworld;
+  if(myKeys.domain) h["X-VWorld-Domain"] = myKeys.domain;
+  if(myKeys.data)   h["X-Data-Key"] = myKeys.data;
+  return h;
+}
+
+/** 저장된 개인 VWorld 키가 실패해 서버 키로 복구된 경우 같은 오류를 반복하지 않는다. */
+function acceptVWorldKeyFallback(response){
+  if(response.headers.get("X-VWorld-Key-Source") !== "server-fallback") return;
+  delete myKeys.vworld;
+  delete myKeys.domain;
+  if(Object.keys(myKeys).some(k => myKeys[k])) LS.set(KEYS, JSON.stringify(myKeys));
+  else LS.del(KEYS);
+  const vworld = document.getElementById("k-vworld");
+  const domain = document.getElementById("k-domain");
+  if(vworld) vworld.value = "";
+  if(domain) domain.value = "";
+  log("저장된 VWorld 키가 유효하지 않아 서버 키로 전환했습니다.", true);
+}
+
+function newAerialJobId(){
+  const random = Math.random().toString(36).slice(2, 10);
+  return `aerial-${Date.now().toString(36)}-${random}`;
+}
+
+/** 동기 이미지 응답과 나란히 작업 상태 API를 확인한다. 반환 함수로 즉시 중단할 수 있다. */
+function watchAerialProgress(jobId, onUpdate){
+  let stopped = false;
+  const wait = ms => new Promise(ok => setTimeout(ok, ms));
+  (async () => {
+    while(!stopped){
+      await wait(180);
+      if(stopped) break;
+      try{
+        const r = await fetch(`/api/job/${encodeURIComponent(jobId)}`, {cache:"no-store"});
+        if(r.status === 404) continue; // 이미지 요청이 작업 상태를 만들기 직전일 수 있다.
+        if(!r.ok) break;
+        const job = await r.json();
+        onUpdate(job);
+        if(job.status !== "running") break;
+      }catch(_){
+        // 본 이미지 요청이 오류를 알려 주므로 진행률 폴링 오류는 조용히 넘긴다.
+      }
+    }
+  })();
+  return () => { stopped = true; };
+}
+
+// 모든 fetch 에 자동으로 붙인다. 호출부마다 넣는 걸 잊으면 조용히 서버 키를 쓰게 된다.
+const rawFetch = window.fetch.bind(window);
+window.fetch = withAPIKeys(rawFetch, location.origin, keyHeaders);
+let KEY = "", MAP, parcelLayer, bldgLayer, extentBox, extentVeil, current = null;
+let siteLoadId = 0;
+const TILE = {};              // 배경 타일 (일반지도·항공사진·라벨)
+let PARCEL_BY_PNU = new Map();  // 건물 팝업이 그 필지의 대장 정보를 끌어 쓴다
+const picked = new Map();   // pnu → {jibun, area, layer}
+
+// 대상지/프리셋을 불러오는 도중 다이어그램 탭으로 넘어가도, 그 작업이 끝난 뒤의
+// 상태만 장면으로 만든다. Promise 하나로 덮어쓰면 중첩 작업을 놓치므로 Set으로 센다.
+const SITE_STATE_TASKS = new Set();
+function trackSiteState(task){
+  const p = Promise.resolve(task);
+  SITE_STATE_TASKS.add(p);
+  const done = () => SITE_STATE_TASKS.delete(p);
+  p.then(done, done);
+  return p;
+}
+async function waitSiteState(){
+  while(SITE_STATE_TASKS.size) await Promise.allSettled([...SITE_STATE_TASKS]);
+}
+
+const boundarySignature = ring => JSON.stringify((ring || []).map(p => {
+  const x = Array.isArray(p) ? p[0] : p.lng, y = Array.isArray(p) ? p[1] : p.lat;
+  return [Math.round((+x || 0) * 1e7) / 1e7, Math.round((+y || 0) * 1e7) / 1e7];
+}));
+let appliedBoundarySignature = boundarySignature([]);
+let presetBoundaryPending = false;
+let siteSceneFingerprint = "";
+
+function log(msg, head){
+  const el = Q("#log");
+  const line = document.createElement(head ? "b" : "span");
+  line.textContent = (head ? "\n" : "") + msg + "\n";
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ─────────────────────────────────────────────────────────── 지도
+function initMap(){
+  MAP = L.map("map", {center:[37.5807,127.0404], zoom:16, zoomControl:true, preferCanvas:true});
+  const tpl = l => `https://api.vworld.kr/req/wmts/1.0.0/${KEY}/${l}/{z}/{y}/{x}.${l==="Satellite"?"jpeg":"png"}`;
+  TILE.base = L.tileLayer(tpl("Base"),      {maxZoom:19, attribution:"© V-World"}).addTo(MAP);
+  TILE.sat  = L.tileLayer(tpl("Satellite"), {maxZoom:19, attribution:"© V-World"});
+  TILE.hyb  = L.tileLayer(tpl("Hybrid"),    {maxZoom:19});
+  bindBoxSelect();
+  bindRightPanel();
+}
+
+// ──────────────────────────────────────────────────────────── 필터
+let matched = null;     // 필터가 켜져 있을 때만 Set<pnu>, 아니면 null
+const HIDDEN = {opacity:0, fillOpacity:0};
+
+function filterValues(){
+  const num = id => { const v = parseFloat(Q(id).value); return isNaN(v) ? null : v; };
+  return {
+    // 필지
+    jimok: Q("#f-jimok").value, cnt: Q("#f-cnt").value,
+    zone: Q("#f-zone").value, district: Q("#f-district").value,
+    amin: num("#f-amin"), amax: num("#f-amax"),
+    // 건물
+    strct: Q("#f-strct").value, purps: Q("#f-purps").value,
+    ymin: num("#f-ymin"), ymax: num("#f-ymax"),
+    fmin: num("#f-fmin"), fmax: num("#f-fmax"),
+    hide: Q("#f-hide").checked,
+  };
+}
+
+// 필지 조건 / 건물 조건을 나눠 센다 (각 패널의 건수 표시용)
+function activeParts(v){
+  const parcel = !!(v.jimok || v.cnt || v.zone || v.district ||
+                    v.amin != null || v.amax != null);
+  const bldg = !!(v.strct || v.purps || v.ymin != null || v.ymax != null ||
+                  v.fmin != null || v.fmax != null);
+  return {parcel, bldg};
+}
+
+function isFilterActive(v){
+  const p = activeParts(v);
+  return p.parcel || p.bldg;
+}
+
+function match(p, v){
+  if(v.jimok && p.jimok !== v.jimok) return false;
+  if(v.zone && (p.zone || "") !== v.zone) return false;
+  if(v.district && (p.district || "") !== v.district) return false;
+  if(v.strct && (p.strct || "") !== v.strct) return false;
+  if(v.purps && (p.main_purps || "") !== v.purps) return false;
+  const fl = p.grnd_flr_cnt;
+  if(v.fmin != null && !(fl >= v.fmin)) return false;
+  if(v.fmax != null && !(fl <= v.fmax)) return false;
+  const a = p["필지면적_m2"];
+  if(v.amin != null && !(a >= v.amin)) return false;
+  if(v.amax != null && !(a <= v.amax)) return false;
+  const y = p.use_apr_year;
+  if(v.ymin != null && !(y >= v.ymin)) return false;
+  if(v.ymax != null && !(y <= v.ymax)) return false;
+  const c = p["대장건수"] ?? 0;
+  if(v.cnt === "1"  && c !== 1) return false;
+  if(v.cnt === "2+" && !(c >= 2)) return false;
+  if(v.cnt === "0"  && c !== 0) return false;
+  return true;
+}
+
+function applyFilter(){
+  if(!parcelLayer) return;
+  const v = filterValues();
+  const active = isFilterActive(v);
+  matched = null;
+
+  if(active){
+    matched = new Set();
+    parcelLayer.eachLayer(l => { if(match(l.feature.properties, v)) matched.add(l.feature.properties.pnu); });
+  }
+  parcelLayer.setStyle(f => parcelStyle(f, v));
+  if(bldgLayer) bldgLayer.setStyle(f => bldgStyle(f, v));
+
+  const part = activeParts(v);
+  const total = parcelLayer.getLayers().length;
+  Q("#fcount").textContent = part.parcel && active ? `${matched.size} / ${total}` : "";
+  Q("#bcount").textContent = part.bldg && active ? `${matched.size} / ${total}` : "";
+  Q("#f-pick").style.display = active ? "" : "none";
+  const sum = Q("#rp-sum");
+  if(sum) sum.textContent = active ? `${matched.size} / ${total}` : "";
+}
+
+const parcelStyle = (f, v) => {
+  const p = f.properties;
+  if(psPick && psParcels.has(p.pnu)) return {color:"#e0b088", weight:2.2, opacity:1,
+                                             fill:true, fillColor:"#e0b088", fillOpacity:.28};
+  if(picked.has(p.pnu)) return {color:"#e2564a", weight:2.5, opacity:1, fill:true,
+                                fillColor:"#e2564a", fillOpacity:.35};
+  if(matched && !matched.has(p.pnu))
+    return (v || filterValues()).hide ? HIDDEN
+         : {color:"#9aa3b2", weight:.4, opacity:.12, fill:false};
+  if(matched) return {color:"#e0b088", weight:1.4, opacity:1, fill:true,
+                      fillColor:"#e0b088", fillOpacity:.2};
+  return {color:"#9aa3b2", weight:.7, opacity:1, fill:true, fillOpacity:0, fillColor:"#fff"};
+};
+
+const bldgStyle = (f, v) => {
+  if(matched && !matched.has(f.properties._pnu))
+    return (v || filterValues()).hide ? HIDDEN
+         : {color:"#6b7280", weight:.4, opacity:.15, fillOpacity:.06, fillColor:"#6b7280"};
+  return {color:"#2f6f4e", weight:.7, opacity:1, fillColor:"#cfe6d8", fillOpacity:.75};
+};
+
+function fillFilterOptions(features){
+  // 실제 데이터에 있는 값만 목록에 넣는다 — 지역마다 나오는 값이 다르다
+  const put = (id, key) => {
+    const vals = [...new Set(features.map(f => f.properties[key]).filter(Boolean))].sort();
+    Q(id).innerHTML = `<option value="">전체</option>` +
+      vals.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join("");
+  };
+  put("#f-jimok", "jimok");
+  put("#f-zone", "zone");
+  put("#f-district", "district");
+  put("#f-strct", "strct");
+  put("#f-purps", "main_purps");
+}
+
+const PARCEL_FIELDS = ["#f-jimok", "#f-zone", "#f-district", "#f-cnt", "#f-amin", "#f-amax"];
+const BLDG_FIELDS   = ["#f-strct", "#f-purps", "#f-ymin", "#f-ymax", "#f-fmin", "#f-fmax"];
+
+function resetFields(ids){
+  ids.forEach(id => Q(id).value = "");
+  applyFilter();
+}
+
+function resetFilter(){          // 대상지를 새로 열 때 쓰는 전체 초기화
+  [...PARCEL_FIELDS, ...BLDG_FIELDS].forEach(id => Q(id).value = "");
+  Q("#f-hide").checked = false;
+  applyFilter();
+}
+
+
+/** 건물을 클릭했을 때. 건물 자체 정보 + 그 필지의 대장 요약. */
+function bldgPopupHTML(p){
+  const info = PARCEL_BY_PNU.get(p._pnu) || {};
+  const addr = [p.rd_nm, p.buld_no].filter(Boolean).join(" ");
+  const many = (info["대장건수"] || 0) > 1;
+  const rows = [
+    ["도로명주소", addr],
+    ["건물명", p.buld_nm],
+    ["지상층수", p.gro_flo_co ? p.gro_flo_co + "층" : null],
+    ["—", "—"],
+    ["주용도", info.main_purps],
+    ["구조", info.strct],
+    ["지붕", info.roof],
+    ["사용승인", info.use_apr_year],
+    ["연면적", info.tot_area ? info.tot_area + " m²" : null],
+    ["대지면적", info["필지면적_m2"] ? info["필지면적_m2"] + " m²" : null],
+  ].filter(r => r[1] !== null && r[1] !== undefined && String(r[1]).trim() !== "" && r[0] !== "—");
+
+  const safePnu = String(p._pnu || "").replace(/\D/g, "");
+  return `<div class="pop"><h3>${esc(p.buld_nm || addr || "건물")}</h3>
+    ${rows.map(r => `<div><span>${esc(r[0])}</span><span>${esc(r[1])}</span></div>`).join("")}
+    ${many ? `<div class="popnote">이 필지에 대장 ${esc(info["대장건수"])}건 —
+        위 값은 주건축물 기준입니다.</div>` : ""}
+    ${info.main_purps ? "" : `<div class="popnote">이 필지는 건축물대장이 없습니다.</div>`}
+    <button type="button" data-toggle-pnu="${esc(safePnu)}">${picked.has(p._pnu)
+      ? "DESIGN AREA 에서 빼기" : "이 필지를 DESIGN AREA 로"}</button></div>`;
+}
+
+function popupHTML(p){
+  const rows = [
+    ["지목", p.jimok], ["대지면적", p["필지면적_m2"] ? p["필지면적_m2"]+" m²  ("+p["필지면적_평"]+"평)" : null],
+    ["주용도", p.main_purps], ["구조", p.strct], ["지붕", p.roof],
+    ["사용승인", p.use_apr_year], ["지상층수", p.grnd_flr_cnt],
+    ["연면적", p.tot_area ? p.tot_area+" m²" : null],
+    ["건폐율", p.bc_rat ? p.bc_rat+" %" : null],
+    ["용적률", p.vl_rat ? p.vl_rat+" %" : null],
+    ["건물/대장", (p["건물동수"] ?? "-") + " / " + (p["대장건수"] ?? "-")],
+  ].filter(r => r[1] !== null && r[1] !== undefined && r[1] !== "");
+  const safePnu = String(p.pnu || "").replace(/\D/g, "");
+  return `<div class="pop"><h3>${esc(p.jibun || p.pnu)}</h3>
+    ${rows.map(r=>`<div><span>${esc(r[0])}</span><span>${esc(r[1])}</span></div>`).join("")}
+    <button type="button" data-toggle-pnu="${esc(safePnu)}">${picked.has(p.pnu)?"DESIGN AREA 에서 빼기":"DESIGN AREA 로 지정"}</button></div>`;
+}
+
+// ══════════════════════════════════════════ 프리셋 — 잡아 놓은 것을 통째로
+//
+// 담기·주고받기의 몸통은 presets.js 가 맡는다. 여기서는 「무엇을 담고
+// 어떻게 되돌리는가」만 정한다.
+
+function presetCapture(){
+  const val = id => { const e = Q("#" + id); return e ? e.value : ""; };
+  const chk = id => { const e = Q("#" + id); return e ? e.checked : false; };
+  return {
+    site: current,
+    ps: psPts.map(p => [p.lng, p.lat]),                 // 02 경계
+    picked: [...picked.keys()],                         // 03 고른 필지
+    ex: exPts.map(p => [p.lng, p.lat]),                 // 04 따로 지정한 범위
+    exScope,
+    exLayers: [...document.querySelectorAll("#exm-layers input:checked")]
+                .map(i => i.dataset.l),
+    parcelF: {jimok: val("f-jimok"), cnt: val("f-cnt"), zone: val("f-zone"),
+              district: val("f-district"), amin: val("f-amin"), amax: val("f-amax")},
+    bldgF: {strct: val("f-strct"), purps: val("f-purps"),
+            ymin: val("f-ymin"), ymax: val("f-ymax"),
+            fmin: val("f-fmin"), fmax: val("f-fmax"), hide: chk("f-hide")},
+    layers: {hyb: chk("L-hyb"), parcel: chk("L-parcel"),
+             bldg: chk("L-bldg"), extent: chk("L-extent")},
+  };
+}
+
+function presetLabel(s){
+  const bits = [s.site || "대상지 없음"];
+  if(s.ps && s.ps.length >= 3) bits.push(`경계 ${s.ps.length}점`);
+  if(s.picked && s.picked.length) bits.push(`${s.picked.length}필지`);
+  return bits.join(" · ");
+}
+
+async function presetApplyCore(s){
+  try{
+    if(s.site && s.site !== current){
+      Q("#sites").value = s.site;
+      if (!await loadSite(s.site)) return;
+    }
+    const put = (id, v) => { const e = Q("#" + id); if(e && v !== undefined) e.value = v; };
+    const tick = (id, v) => { const e = Q("#" + id); if(e && v !== undefined) e.checked = !!v; };
+
+    Object.entries(s.parcelF || {}).forEach(([k, v]) => put("f-" + k, v));
+    Object.entries(s.bldgF || {}).forEach(([k, v]) =>
+      k === "hide" ? tick("f-hide", v) : put("f-" + k, v));
+    Object.entries(s.layers || {}).forEach(([k, v]) => {
+      const e = Q("#L-" + k); if(!e) return;
+      e.checked = !!v; e.dispatchEvent(new Event("change"));
+    });
+
+    psPts = (s.ps || []).map(p => L.latLng(p[1], p[0]));  psRedraw();
+    // 프리셋의 PROJECT SITE가 서버에 저장된 경계와 다르면 다이어그램 진입 때
+    // 오버레이 안에서 먼저 저장한다. 그래야 새 장면이 예전 경계를 읽지 않는다.
+    presetBoundaryPending = boundarySignature(s.ps || []) !== appliedBoundarySignature;
+    exPts = (s.ex || []).map(p => L.latLng(p[1], p[0]));  exRedraw();
+
+    picked.clear();
+    for(const pnu of s.picked || []){
+      const p = PARCEL_BY_PNU && PARCEL_BY_PNU.get(pnu);
+      picked.set(pnu, {jibun: (p && p.jibun) || pnu, area: (p && p["필지면적_m2"]) || 0});
+    }
+    if(parcelLayer) parcelLayer.eachLayer(l => l.setStyle(parcelStyle(l.feature)));
+    renderPicked();
+
+    if(s.exScope) setExScope(s.exScope);
+    if(s.exLayers) document.querySelectorAll("#exm-layers input").forEach(
+      i => i.checked = s.exLayers.includes(i.dataset.l));
+
+    applyFilter();
+
+    // 프리셋을 불렀다는 것은 01~03 이 이미 정해졌다는 뜻이다. 남은 일은 내보내기다.
+    foldSec("ctxsec", "ctx-badge", s.site || "");
+    if(psPts.length >= 3) foldSec("psitebox", "ps-badge", `${psPts.length}점 · ${fmtArea(psArea())}`);
+    if(picked.size){
+      const total = [...picked.values()].reduce((t, v) => t + (v.area || 0), 0);
+      foldSec("selbox", "ds-badge", `${picked.size}필지 · ${fmtArea(total)}`);
+    }
+    openStage("outbox");
+  }catch(e){
+    log("!! 프리셋을 되돌리지 못했습니다: " + (e.message || e));
+  }
+}
+
+function presetApply(s){
+  return trackSiteState(presetApplyCore(s));
+}
+
+const SITE_PRESETS = makePresets({
+  kind: "site", chipsId: "presets", prefix: "ps", fileKind: "vworld-sitemap-presets",
+  fileName: n => `프리셋_${n}개.json`,
+  capture: presetCapture, apply: presetApply, label: presetLabel,
+  say: t => log(t),
+  afterImport: doc => {
+    // 가져온 프리셋이 가리키는 대상지가 이 컴퓨터에 없을 수 있다
+    const have = new Set([...Q("#sites").options].map(o => o.value));
+    const missing = [...new Set((doc.slots || [])
+      .map(s => s.state && s.state.site).filter(n => n && !have.has(n)))];
+    if(missing.length)
+      log(`!! ${missing.join(", ")} 은 이 컴퓨터에 없습니다. 그 주소로 먼저 분석하세요.`);
+  },
+});
+
+// ────────────────────────────── 무엇을 눌렀는지 — 건물이냐 필지냐
+//
+// 건물은 필지 위에 놓여 있어서, 건물을 누르면 아래 필지에는 손이 닿지 않는다.
+// 그렇다고 순서를 뒤집으면 반대가 된다. 둘 다 있는 자리에서는 커서 옆에 물어본다.
+
+let INFO = null;                   // 지금 열려 있는 팝업이 무엇을 보여 주는지
+let dsPick = null;                 // null | "add" | "sub" — DESIGN AREA 단일 필지 편집
+
+/** 다각형 안에 점이 들었나 — 광선 교차법. 구멍은 홀짝으로 상쇄된다. */
+function ringHas(ring, p){
+  let inside = false;
+  for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+    const a = ring[i], b = ring[j];
+    if((a.lat > p.lat) !== (b.lat > p.lat) &&
+       p.lng < (b.lng - a.lng) * (p.lat - a.lat) / (b.lat - a.lat) + a.lng) inside = !inside;
+  }
+  return inside;
+}
+
+function shapeHas(layer, p){
+  if(!layer.getBounds || !layer.getBounds().contains(p)) return false;   // 먼저 상자로 걸러 낸다
+  const rings = [];
+  (function walk(x){ Array.isArray(x) ? (Array.isArray(x[0]) ? x.forEach(walk) : rings.push(x)) : null; })(layer.getLatLngs());
+  let inside = false;
+  for(const r of rings) if(ringHas(r, p)) inside = !inside;
+  return inside;
+}
+
+/** 지도에 올라와 있는 레이어들 중 그 점을 품은 것. 꺼 둔 레이어는 세지 않는다. */
+function hitsAt(group, latlng){
+  const out = [];
+  if(!group || !MAP.hasLayer(group)) return out;
+  group.eachLayer(l => { if(shapeHas(l, latlng)) out.push(l); });
+  return out;
+}
+
+function infoHTML(kind, layer){
+  return kind === "bldg" ? bldgPopupHTML(layer.feature.properties)
+                         : popupHTML(layer.feature.properties);
+}
+
+function bindInfoActions(pop){
+  const button = pop?.getElement?.()?.querySelector?.("[data-toggle-pnu]");
+  if(!button) return;
+  button.addEventListener("click", () => toggle(button.dataset.togglePnu || ""), {once:true});
+}
+
+function openInfo(kind, layer, latlng){
+  hidePickMenu();                   // 둘은 같이 뜨지 않는다
+  INFO = {kind, layer};
+  // closeOnClick 을 끄는 이유: 팝업 안의 「DESIGN AREA 로」 단추를 누르면
+  // 그 클릭이 지도까지 새어 나가 팝업이 닫혀 버렸다. 닫는 것은 아래에서 직접 한다.
+  const pop = L.popup({maxWidth: 340, autoPan: true, closeOnClick: false})
+    .setLatLng(latlng).setContent(infoHTML(kind, layer)).openOn(MAP);
+  // 팝업 안의 클릭이 지도까지 새어 나가지 않게 막는다.
+  // disableClickPropagation 은 mousedown 계열만 막고 click 은 그대로 통과시킨다 —
+  // 그래서 click 은 따로 세워야 한다.
+  const el = pop.getElement();
+  if(el){
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.on(el, "click", L.DomEvent.stopPropagation);
+  }
+  bindInfoActions(pop);
+}
+
+/** 열려 있는 팝업을 다시 그린다. DESIGN AREA 에 넣고 뺀 것이 단추에 바로 보이게. */
+function refreshInfo(){
+  if(!INFO || !MAP._popup || !MAP._popup.isOpen()) return;
+  MAP._popup.setContent(infoHTML(INFO.kind, INFO.layer));
+  bindInfoActions(MAP._popup);
+}
+
+function onFeatureClick(e, kind, layer){
+  if(boxMode) return;                       // 그리는 중에는 팝업을 열지 않는다
+  L.DomEvent.stopPropagation(e);
+
+  const featurePnu = kind === "parcel" ? layer.feature.properties.pnu
+                                        : layer.feature.properties._pnu;
+
+  // PROJECT SITE 경계를 필지 단위로 다듬는 중 — 누른 필지를 넣거나 뺀다
+  if(psPick){
+    if(!featurePnu) return;
+    psPick === "add" ? psParcels.add(featurePnu) : psParcels.delete(featurePnu);
+    psRebuild();
+    return;
+  }
+  // DESIGN AREA도 팝업을 거치지 않고 명시적으로 한 필지씩 추가·제거한다.
+  if(dsPick){
+    if(!featurePnu) return;
+    setDesignParcel(featurePnu, dsPick === "add");
+    return;
+  }
+  const p = e.latlng;
+  const cand = [];
+  for(const l of hitsAt(bldgLayer, p))   cand.push({kind: "bldg",   layer: l});
+  for(const l of hitsAt(parcelLayer, p)) cand.push({kind: "parcel", layer: l});
+
+  // 판정이 어긋나 방금 누른 것이 빠졌으면 그것만은 넣어 준다
+  if(!cand.some(c => c.layer === layer)) cand.unshift({kind, layer});
+
+  if(cand.length <= 1) return openInfo(kind, layer, p);
+  showPickMenu(cand, e.originalEvent, p);
+}
+
+// ────────────────────────────── 커서 옆 선택지
+const PM = () => document.getElementById("pickmenu");
+
+function hidePickMenu(){ const m = PM(); if(m) m.style.display = "none"; }
+
+function showPickMenu(cand, ev, latlng){
+  const m = PM();
+  if(!m) return openInfo(cand[0].kind, cand[0].layer, latlng);
+  // 열려 있던 팝업은 닫는다. 도형 클릭은 지도까지 가지 않으므로 여기서 직접 닫아야 한다.
+  MAP.closePopup();
+
+  const label = c => {
+    const p = c.layer.feature.properties;
+    if(c.kind === "bldg"){
+      const led = (PARCEL_BY_PNU && PARCEL_BY_PNU.get(p._pnu)) || {};
+      return [p.buld_nm || led.main_purps || "건물",
+              p.gro_flo_co ? `지상 ${p.gro_flo_co}층` : ""];
+    }
+    // 지번에 이미 지목이 붙어 있다(예: 130-17대). 면적이 더 쓸모 있다.
+    return ["필지 " + (p.jibun || p.pnu),
+            p["필지면적_m2"] ? p["필지면적_m2"] + " m²" : (p.jimok || "")];
+  };
+  m.innerHTML = cand.map((c, i) => {
+    const [t, sub] = label(c);
+    return `<button type="button" data-i="${i}"><i class="${c.kind}"></i>` +
+           `<span>${esc(t)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</button>`;
+  }).join("");
+
+  m.style.display = "block";
+  // 화면 밖으로 나가지 않게 — 오른쪽·아래에 자리가 없으면 반대편에 편다
+  const pad = 8, w = m.offsetWidth, h = m.offsetHeight;
+  let x = ev.clientX + 12, y = ev.clientY + 8;
+  if(x + w > innerWidth  - pad) x = ev.clientX - w - 12;
+  if(y + h > innerHeight - pad) y = Math.max(pad, ev.clientY - h - 8);
+  m.style.left = x + "px";
+  m.style.top  = y + "px";
+
+  m.querySelectorAll("button").forEach(b => b.onclick = () => {
+    const c = cand[+b.dataset.i];
+    hidePickMenu();
+    openInfo(c.kind, c.layer, latlng);
+  });
+}
+
+function setDesignParcel(pnu, add){
+  const layer = parcelLayer.getLayers().find(l => l.feature.properties.pnu === pnu);
+  if(!layer) return false;
+  const p = layer.feature.properties;
+  const changed = add ? !picked.has(pnu) : picked.has(pnu);
+  if(add) picked.set(pnu, {jibun:p.jibun || pnu, area:p["필지면적_m2"] || 0});
+  else picked.delete(pnu);
+  layer.setStyle(parcelStyle(layer.feature));
+  refreshInfo();
+  renderPicked();
+  if(changed) log(`DESIGN AREA — ${p.jibun || pnu} ${add ? "추가" : "제거"} (총 ${picked.size}필지)`);
+  return changed;
+}
+
+function toggle(pnu){
+  setDesignParcel(pnu, !picked.has(pnu));
+}
+window.toggle = toggle;
+
+// 고른 필지를 다이어그램 쪽에도 알린다.
+// 예전에는 탭을 바꿀 때만 넘겼는데, 이미 2D 탭에 있는 채로 넘어오면 갱신되지 않아
+// DESIGN AREA 가 끝내 안 나왔다. 고를 때마다 넘긴다.
+function syncSelected(){
+  const keys = new Set(picked.keys());          // picked 는 Map — 키만 담아야 pnu 가 맞는다
+  if(typeof DG === "object" && DG) DG.selected = keys;
+  if(typeof P2 === "object" && P2) P2.selected = new Set(keys);
+}
+
+function renderPicked(){
+  syncSelected();
+  markStages();
+  const total = [...picked.values()].reduce((s,v)=>s+(v.area||0),0);
+  Q("#selcnt").textContent = picked.size ? `${picked.size}필지 · ${total.toFixed(0)}m² (${(total/3.305785).toFixed(0)}평)` : "";
+  const ap = Q("#ds-apply"); if(ap) ap.disabled = !picked.size;
+  Q("#picked").innerHTML = [...picked.entries()].map(([k,v]) => {
+    const pnu=String(k||"").replace(/\D/g,"");
+    return `<div class="chip"><b>${esc(v.jibun)}</b><span>${(+v.area||0).toFixed(0)}m²</span>
+      <button type="button" class="chip-remove" data-remove-pnu="${esc(pnu)}" aria-label="필지 제거">✕</button></div>`;
+  }).join("");
+  Q("#picked").querySelectorAll("[data-remove-pnu]").forEach(button =>
+    button.addEventListener("click",()=>toggle(button.dataset.removePnu||"")));
+}
+
+
+
+
+
+// DESIGN AREA 점 찍어 선택 — 다 찍으면 그 안에 온전히 들어온 필지를 고른다
+function dsRedraw(){
+  if(dsLayer){ MAP.removeLayer(dsLayer); dsLayer = null; }
+  dsDots.forEach(d => MAP.removeLayer(d)); dsDots = [];
+  if(dsPts.length){
+    const closed = dsPts.length >= 3;
+    const st = {color:"#e2564a", weight:2, dashArray:"5 4", fillOpacity: closed ? .06 : 0,
+                interactive: false};
+    dsLayer = (closed ? L.polygon(dsPts, st) : L.polyline(dsPts, st)).addTo(MAP);
+    dsPts.forEach(p => dsDots.push(L.circleMarker(p,
+      {radius:4, color:"#e2564a", fillColor:"#e2564a", fillOpacity:1, weight:1,
+       interactive:false}).addTo(MAP)));
+  }
+  Q("#dsundo").disabled = !dsPts.length;
+}
+
+function dsClear(){
+  dsPts = [];
+  if(dsGhost){ MAP.removeLayer(dsGhost); dsGhost = null; }
+  dsRedraw();
+}
+
+function dsDone(sub){
+  const ring = dsPts.slice();
+  if(ring.length >= 3 && parcelLayer) onSelectPoly(ring, sub);
+  dsClear();          // 점만 비우고 모드는 살려 둔다 — 이어서 더 고를 수 있게
+}
+
+// ══════════════════════════════════════════ 02 PROJECT SITE — 직접 그리기
+//
+// 공모가 지정한 대상지 경계다. CONTEXT 안에서 사용자가 직접 그린다.
+// 수집을 다시 하지 않고, 이미 받아 둔 자료를 이 경계로 자르기만 한다.
+
+let psPts = [];            // [L.LatLng]
+let dsPts = [], dsLayer = null, dsDots = [], dsGhost = null;   // DESIGN AREA 점찍기
+let psLayer = null, psDots = [], psGhost = null;
+
+function psSize(){
+  if(psPts.length < 3) return [0, 0];
+  const b = L.latLngBounds(psPts);
+  return boxSize(b);
+}
+
+function psArea(){          // 구면을 무시한 평면 근사 — 안내용으로 충분하다
+  if(psPts.length < 3) return 0;
+  const mid = psPts.reduce((s,p)=>s+p.lat,0)/psPts.length;
+  const mx = 111320 * Math.cos(mid*Math.PI/180), my = 111320;
+  let a = 0;
+  for(let i=0, n=psPts.length; i<n; i++){
+    const p = psPts[i], q = psPts[(i+1)%n];
+    a += (p.lng*mx)*(q.lat*my) - (q.lng*mx)*(p.lat*my);
+  }
+  return Math.abs(a) / 2;
+}
+
+function psRedraw(){
+  if(psLayer){ MAP.removeLayer(psLayer); psLayer = null; }
+  psDots.forEach(d => MAP.removeLayer(d)); psDots = [];
+  if(psPts.length){
+    const closed = psPts.length >= 3;
+    // interactive:false 가 중요하다. 채워진 다각형은 그 안의 클릭을 전부 삼켜,
+    // 경계를 확정하고 나면 안쪽 필지·건물을 하나도 고를 수 없게 된다.
+    const style = {color:"#e0b088", weight:2, fillOpacity: closed ? .07 : 0,
+                   interactive: false};
+    psLayer = (closed ? L.polygon(psPts, style) : L.polyline(psPts, style)).addTo(MAP);
+    if(boxMode === "sitepoly")
+      psPts.forEach(p => psDots.push(
+        L.circleMarker(p, {radius:4, color:"#e0b088", fillColor:"#e0b088",
+                           fillOpacity:1, weight:1, interactive:false}).addTo(MAP)));
+  }
+  const has = psPts.length >= 3;
+  Q("#ps-undo").disabled  = !psPts.length;
+  Q("#ps-clear").disabled = !psPts.length;
+  Q("#ps-apply").disabled = !current;
+  const info = Q("#ps-info");
+  if(has){
+    const [w,hh] = psSize(), a = psArea();
+    info.innerHTML = `<b>${psPts.length}점</b> · 외곽 ${w.toFixed(0)} × ${hh.toFixed(0)} m` +
+      `<br>면적 약 <b>${(a/10000).toFixed(2)} ha</b> (${a.toFixed(0)} m²)` +
+      `<br>«경계 적용» 을 누르면 이 선으로 도면을 자릅니다.`;
+  } else if(psPts.length){
+    info.innerHTML = `${psPts.length}점 — 세 점 이상 찍어야 경계가 됩니다.` +
+      `<br>Enter 로 확정, Backspace 로 한 점 취소.`;
+  } else {
+    info.innerHTML = `공모가 지정한 대상지 경계를 직접 그리세요.<br>` +
+      `이 경계로 도면의 모든 객체가 잘려 <b>닫힌 도형</b>이 됩니다.<br>` +
+      `안 그리면 CONTEXT 수집범위 전체가 기준이 됩니다.`;
+  }
+}
+
+function psClear(){
+  psPts = [];
+  psParcels = new Set();
+  setPsPickMode(null);
+  if(psGhost){ MAP.removeLayer(psGhost); psGhost = null; }
+  psRedraw(); psSnapInfo();
+}
+
+function psFromBounds(b){
+  psPts = [b.getSouthWest(), b.getSouthEast(), b.getNorthEast(), b.getNorthWest()];
+  psRedraw();
+}
+
+async function psLoad(name, isCurrent = () => current === name){
+  psClear();
+  presetBoundaryPending = false;
+  if(!name){ appliedBoundarySignature = boundarySignature([]); return; }
+  try {
+    const r = await fetch(DRAW.siteURL(name, "/boundary"));
+    const d = await r.json();
+    if (!isCurrent()) return;
+    if(d.ring && d.ring.length >= 4){
+      // 저장본은 첫 점이 끝에 한 번 더 붙어 있다
+      const ring = d.ring.slice(0, -1);
+      psPts = ring.map(p => L.latLng(p[1], p[0]));
+      psRedraw();
+    }
+  } catch(e){ /* 없으면 그냥 빈 상태 */ }
+  if (isCurrent()) appliedBoundarySignature = boundarySignature(psPts);
+}
+
+// ── PROJECT SITE 경계를 필지에 맞추기
+//
+// 손으로 그린 선은 필지 한가운데를 가로지른다. 공모 대상지는 필지 단위로 정해지므로
+// 「안에 든 필지」를 찾아 그 바깥선으로 경계를 다시 그린다.
+
+let psParcels = new Set();          // 경계에 든 필지 pnu
+let psPick = null;                  // null | "add" | "sub" — 지도에서 필지를 누를 때
+
+function paintParcelPickModes(){
+  const put = (id, on) => { const el = Q(id); if(el) el.classList.toggle("on", on); };
+  put("#ps-add", psPick === "add"); put("#ps-sub", psPick === "sub");
+  put("#ds-add", dsPick === "add"); put("#ds-sub", dsPick === "sub");
+  if(Q("#map")) Q("#map").style.cursor = psPick || dsPick ? "crosshair" : "";
+  if(parcelLayer) parcelLayer.setStyle(f => parcelStyle(f));
+}
+
+function stopParcelPickModes(){
+  psPick = null; dsPick = null;
+  paintParcelPickModes();
+}
+
+function setPsPickMode(mode){
+  const next = psPick === mode ? null : mode;
+  setBoxMode(null);                         // 영역 그리기와 단일 필지 편집은 동시에 하지 않는다
+  psPick = next; dsPick = null;
+  // 저장된/직접 그린 경계가 있으면 처음 누를 때 현재 포함 필지를 자동으로 복원한다.
+  if(psPick && !psParcels.size && psPts.length >= 3 && parcelLayer){
+    collectProjectParcels(psPts);
+    if(psParcels.size) psRebuild();
+  }
+  paintParcelPickModes();
+  if(psPick && !psParcels.size)
+    log("PROJECT SITE — 지도에서 필지를 눌러 첫 필지를 담으세요.");
+}
+
+function setDsPickMode(mode){
+  const next = dsPick === mode ? null : mode;
+  setBoxMode(null);
+  dsPick = next; psPick = null;
+  paintParcelPickModes();
+  if(dsPick) log(`DESIGN AREA — 지도에서 필지·건물을 눌러 ${dsPick === "add" ? "추가" : "제거"}하세요.`);
+}
+
+/** 필지의 무게중심이 다각형 안인가 */
+function parcelInRing(layer, ring){
+  const b = layer.getBounds().getCenter();
+  let inside = false;
+  for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+    const a = ring[i], c = ring[j];
+    if((a.lat > b.lat) !== (c.lat > b.lat) &&
+       b.lng < (c.lng - a.lng) * (b.lat - a.lat) / (c.lat - a.lat) + a.lng) inside = !inside;
+  }
+  return inside;
+}
+
+function psSnapInfo(hull){
+  const el = Q("#ps-snapinfo");
+  if(!el) return;
+  el.textContent = psParcels.size
+    ? `필지 ${psParcels.size}개로 경계를 잡았습니다.` +
+      (hull ? " 떨어진 필지는 하나의 Convex Hull 경계로 감쌌습니다." : " 추가·제거로 다듬으세요.")
+    : "";
+}
+
+function collectProjectParcels(ring){
+  const found = new Set();
+  if(parcelLayer && ring && ring.length >= 3) parcelLayer.eachLayer(l => {
+    if(parcelInRing(l, ring)) found.add(l.feature.properties.pnu);
+  });
+  psParcels = found;
+  return found.size;
+}
+
+/** 든 필지들의 바깥 테두리로 psPts 를 다시 만든다 */
+function psRebuild(){
+  if(!parcelLayer) return;
+  if(!psParcels.size){
+    psPts = [];
+    psRedraw(); psSnapInfo(); paintParcelPickModes();
+    return;
+  }
+  const rings = [];
+  parcelLayer.eachLayer(l => {
+    if(!psParcels.has(l.feature.properties.pnu)) return;
+    (function walk(x){
+      Array.isArray(x) ? (Array.isArray(x[0]) ? x.forEach(walk)
+                        : rings.push(x.map(p => [p.lng, p.lat]))) : null;
+    })(l.getLatLngs());
+  });
+  // dissolveRings 기본값은 미터 좌표용이다. 경위도에서는 1e7(약 1cm)로 맞춘다.
+  const outer = dissolveRings(rings, 1e7);
+  const shells = outer.filter(r => ringArea(r) > 0);
+  let usedHull = false;
+  // PROJECT SITE 저장 형식은 경계 하나다. 떨어진 필지를 추가했으면 누락시키지 않고
+  // 모든 선택 필지를 감싸는 볼록 외곽선으로 연결한다.
+  let best;
+  if(shells.length > 1){ best = convexHull(rings); usedHull = true; }
+  else best = (shells.length ? shells : outer)
+    .sort((a, b) => Math.abs(ringArea(b)) - Math.abs(ringArea(a)))[0];
+  if(best) psPts = best.map(p => L.latLng(p[1], p[0]));
+  psRedraw(); psSnapInfo(usedHull); paintParcelPickModes();
+}
+
+function psSnap(){
+  if(!parcelLayer) return alert("먼저 CONTEXT 를 고르세요.");
+  if(psPts.length < 3) return alert("경계를 세 점 이상 그려 주세요.");
+  const ring = psPts.slice();
+  collectProjectParcels(ring);
+  if(!psParcels.size) return alert("경계 안에 든 필지가 없습니다.");
+  psRebuild();
+  log(`PROJECT SITE — 필지 ${psParcels.size}개의 바깥선으로 맞췄습니다.`);
+}
+
+async function psApplyCore(){
+  if(!current) return alert("먼저 CONTEXT 를 고르세요.");
+  setBoxMode(null);                 // 확정했으면 그리기도 끝
+  stopParcelPickModes();
+  const btn = Q("#ps-apply");
+  btn.disabled = true;
+  const ring = psPts.map(p => [p.lng, p.lat]);
+  log(ring.length >= 3 ? `PROJECT SITE 경계 ${ring.length}점 적용 중…`
+                       : "PROJECT SITE 경계 해제 중…", true);
+  try {
+    const r = await fetch(DRAW.siteURL(current, "/boundary"), {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ring})
+    });
+    const j = await r.json();
+    if(!r.ok){ log("!! " + (j.detail || r.statusText)); return; }
+    appliedBoundarySignature = boundarySignature(ring);
+    presetBoundaryPending = false;
+    log(j.note);
+    (j.log || []).forEach(l => log(l));
+    foldSec("psitebox", "ps-badge",
+            ring.length >= 3 ? `${ring.length}점 · ${fmtArea(psArea())}` : "경계 없음");
+    openStage("selbox");
+  } catch(e){
+    log("!! 적용하지 못했습니다 — " + (e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function psApply(){
+  return trackSiteState(psApplyCore());
+}
+
+
+// ────────────────────────── 사각형 드래그 = 비율 드롭다운 버튼
+//
+// 비율을 고르는 순간 그리기가 켜진다. 사각형과 점찍기는 둘 중 하나라,
+// 점찍기를 누르면 이 버튼은 꺼진다.
+function bindRatioDrop(prefix, btnId, mode){
+  const wrap = Q("#" + prefix + "-dd");
+  const btn  = Q("#" + btnId);
+  const menu = Q("#" + prefix + "-menu");
+  const hid  = Q("#" + prefix);          // 사각형 비율
+  const shp  = Q("#" + prefix + "-shape");  // rect | circle
+  const cr   = Q("#" + prefix + "-cr");     // 원의 고정 반경(m)
+  const lab  = Q("#" + prefix + "-lab");
+  if(!wrap || !btn || !menu) return;
+
+  const paint = () => menu.querySelectorAll(".ddflyout button").forEach(
+    b => b.classList.toggle("sel",
+        b.dataset.shape === shp.value &&
+        (b.dataset.shape === "rect" ? b.dataset.r === hid.value
+                                    : (cr.value ? b.dataset.r === "fixed"
+                                                : b.dataset.r === "0"))));
+
+  btn.onclick = e => {
+    e.stopPropagation();
+    if(boxMode === mode){ setBoxMode(null); menu.classList.remove("open"); return; }
+    document.querySelectorAll(".ddmenu.open").forEach(m => m !== menu && m.classList.remove("open"));
+    menu.classList.toggle("open");
+    paint();
+  };
+  menu.querySelectorAll(".ddparent").forEach(p => p.onclick = e => {
+    e.stopPropagation();
+    const sub = p.parentElement;
+    menu.querySelectorAll(".ddsub").forEach(s => s !== sub && s.classList.remove("open"));
+    sub.classList.toggle("open");     // 마우스 없이도 열리게
+  });
+  menu.querySelectorAll(".ddflyout button").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    shp.value = b.dataset.shape;
+    let text = b.textContent;
+    if(b.dataset.shape === "circle"){
+      if(b.dataset.r === "fixed"){
+        const v = prompt("원의 반경을 미터로 넣으세요.", cr.value || "250");
+        if(v === null){ menu.classList.remove("open"); return; }
+        const n = Math.abs(parseFloat(v));
+        if(!n){ alert("숫자를 넣어 주세요."); return; }
+        cr.value = n; text = `원 반경 ${n}m`;
+      } else { cr.value = ""; text = "원 자유형"; }
+    } else {
+      cr.value = "";
+      hid.value = b.dataset.r;
+    }
+    lab.textContent = text;
+    menu.classList.remove("open");
+    menu.querySelectorAll(".ddsub").forEach(s => s.classList.remove("open"));
+    setBoxMode(mode);        // 고르는 즉시 그리기 시작
+  });
+  paint();
+}
+
+/** 지금 그리는 모드가 어느 설정을 쓰는지 */
+function shapeCfg(){
+  const p = boxMode === "site" ? "ps-ratio"
+          : boxMode === "select" ? "ds-ratio"
+          : boxMode === "exrect" ? "ex-ratio"
+          : "a-ratio";
+  return { shape: (Q("#" + p + "-shape") || {}).value || "rect",
+           ratio: parseFloat((Q("#" + p) || {}).value || "0") || 0,
+           cr: parseFloat((Q("#" + p + "-cr") || {}).value || "0") || 0 };
+}
+
+/** 원을 다각형으로 (정64각형). 어디서나 폴리곤 하나로 다룰 수 있게. */
+function circleRing(center, radiusM, n){
+  n = n || 64;
+  const dLat = radiusM / 111320;
+  const dLon = radiusM / (111320 * Math.cos(center.lat * Math.PI / 180));
+  const out = [];
+  for(let i = 0; i < n; i++){
+    const t = i / n * Math.PI * 2;
+    out.push(L.latLng(center.lat + dLat * Math.sin(t), center.lng + dLon * Math.cos(t)));
+  }
+  return out;
+}
+
+document.addEventListener("click", () => {
+  document.querySelectorAll(".ddmenu.open").forEach(m => m.classList.remove("open"));
+  document.querySelectorAll(".ddsub.open").forEach(s => s.classList.remove("open"));
+});
+
+
+// ──────────────────────────────────────── 사이드바 폭 조절
+//
+// 목록·필터가 늘어나면서 340px 로는 좁다. 오른쪽 끝을 끌어서 넓힌다.
+// 폭을 바꾸면 지도·캔버스 크기도 달라지므로 다시 그려 줘야 한다.
+const SIDE_MIN = 280, SIDE_MAX = 900, SIDE_DEF = 340;
+
+function setSideWidth(px, save){
+  const w = Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.round(px)));
+  document.documentElement.style.setProperty("--side-w", w + "px");
+  if(save) LS.set("sideW", w);
+  return w;
+}
+
+function afterResize(){
+  if(window.MAP && MAP.invalidateSize) MAP.invalidateSize();
+  if(typeof plan2Render === "function") plan2Render();
+  if(typeof render === "function") try { render(); } catch(e){}
+}
+
+function initSideResize(){
+  let saved = 0;
+  saved = parseInt(LS.get("sideW", "0"), 10) || 0;
+  if(saved) setSideWidth(saved, false);
+
+  const grip = Q("#sidegrip");
+  let dragging = false;
+
+  grip.addEventListener("mousedown", e => {
+    dragging = true;
+    grip.classList.add("drag");
+    document.body.classList.add("resizing");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", e => {
+    if(!dragging) return;
+    setSideWidth(e.clientX, false);
+  });
+  window.addEventListener("mouseup", () => {
+    if(!dragging) return;
+    dragging = false;
+    grip.classList.remove("drag");
+    document.body.classList.remove("resizing");
+    const w = parseInt(getComputedStyle(document.documentElement)
+                       .getPropertyValue("--side-w"), 10);
+    setSideWidth(w, true);
+    afterResize();
+  });
+  grip.addEventListener("dblclick", () => { setSideWidth(SIDE_DEF, true); afterResize(); });
+
+  // 창 크기가 바뀌면 화면 밖으로 나가지 않게 줄인다
+  window.addEventListener("resize", () => {
+    const w = parseInt(getComputedStyle(document.documentElement)
+                       .getPropertyValue("--side-w"), 10);
+    if(w > window.innerWidth - 240) setSideWidth(window.innerWidth - 240, true);
+  });
+}
+
+
+function site_label(name, info){
+  const rb = (info && info.resolved_by) || {};
+  const r = rb.radius_m ? ` · 반경 ${rb.radius_m}m` : "";
+  return name + r;
+}
+
+
+
+// 내보내기 창 — 무엇을 담을지 고른 뒤에 만든다
+
+// 지적도·건물은 이미 지도에 있지만 도로·용도지역·지구단위계획·도시계획도로·지형은
+// 지도에 안 올라간다. 미리보기에서도 보이게 서버에서 가벼운 선만 한 번 받아 둔다.
+let exExtra = null, exExtraFor = null, exExtraBusy = false;
+
+async function loadExportExtra(){
+  if(exExtraFor === current || exExtraBusy || !current) return;
+  exExtraBusy = true;
+  const want = current;
+  try{
+    const r = await fetch(DRAW.siteURL(want, "/preview"));
+    if(r.ok){ exExtra = await r.json(); exExtraFor = want; }
+  }catch(e){ /* 미리보기가 못 그려도 내보내기는 된다 */ }
+  finally{
+    exExtraBusy = false;
+    if(exExtraFor === current && Q("#exmodal").style.display === "flex") drawExportPreview();
+  }
+}
+
+/** 내보내기 미리보기 — 고른 레이어·범위가 바로 반영된다. */
+function drawExportPreview(){
+  const cv = document.getElementById("exm-canvas");
+  if(!cv || !parcelLayer) return;
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+
+  const on = l => !!document.querySelector(`#exm-layers input[data-l="${l}"]:checked`);
+
+  // 어느 범위인가
+  let clip = null;                       // [L.LatLng] 또는 null(=전체)
+  if(exScope === "project" && psPts.length >= 3) clip = psPts;
+  else if(exScope === "area" && exPts.length >= 3) clip = exPts;
+
+  let bounds;
+  if(clip) bounds = L.latLngBounds(clip);
+  else if(exScope === "design" && picked.size){
+    const bs = [];
+    parcelLayer.eachLayer(l => { if(picked.has(l.feature.properties.pnu)) bs.push(l.getBounds()); });
+    bounds = bs.length ? bs.reduce((a, b) => a.extend(b)) : parcelLayer.getBounds();
+  } else {
+    // 01 CONTEXT — 「수집 범위」는 필지가 퍼진 넓이가 아니라 **요청한 사각형**이다.
+    // 필지·도로는 격자 가장자리에 걸치면 도형 전체가 딸려 와 그 밖으로 삐져나온다.
+    // 그 사각형에 맞춰야 미리보기가 실제로 나가는 DXF 와 같아진다.
+    bounds = (extentBox && extentBox.getBounds()) || parcelLayer.getBounds();
+  }
+  if(!bounds || !bounds.isValid()) return;
+
+  const pad = 8;
+  const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+  const midLat = (sw.lat + ne.lat) / 2;
+  const mx = 111320 * Math.cos(midLat * Math.PI / 180), my = 111320;
+  const w = (ne.lng - sw.lng) * mx, hgt = (ne.lat - sw.lat) * my;
+  const s = Math.min((W - pad * 2) / w, (H - pad * 2) / hgt);
+  const ox = (W - w * s) / 2, oy = (H - hgt * s) / 2;
+  const P = ll => [ox + (ll.lng - sw.lng) * mx * s, H - oy - (ll.lat - sw.lat) * my * s];
+
+  const PC = (lng, lat) => [ox + (lng - sw.lng) * mx * s, H - oy - (lat - sw.lat) * my * s];
+  const inScope = pnu => exScope !== "design" || picked.has(pnu);
+
+  // 실제로 잘리는 대로 보여야 한다. 경계를 그렸으면 그 안만, 아니면 범위 사각형까지.
+  // 용도지역·지구단위계획은 동 전체 도형이라 자르지 않으면 화면 끝까지 뻗는다.
+  ctx.save();
+  ctx.beginPath();
+  if(clip) clip.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+  else ctx.rect(ox, oy, w * s, hgt * s);
+  ctx.closePath(); ctx.clip();
+
+  const paint = (layer, want, stroke, fill, lw) => {
+    if(!want || !layer) return;
+    ctx.lineWidth = lw; ctx.strokeStyle = stroke;
+    layer.eachLayer(l => {
+      const pr = l.feature.properties;
+      if(exScope === "design" && !inScope(pr.pnu || pr._pnu)) return;
+      const rings = [];
+      (function walk(x){ Array.isArray(x) ? (Array.isArray(x[0]) ? x.forEach(walk) : rings.push(x)) : null; })(l.getLatLngs());
+      rings.forEach(r => {
+        if(r.length < 2) return;
+        ctx.beginPath();
+        r.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+        ctx.closePath();
+        if(fill){ ctx.fillStyle = fill; ctx.fill(); }
+        ctx.stroke();
+      });
+    });
+  };
+
+  // 서버에서 받아 둔 선 뭉치. 위경도 그대로라 PC 로 바로 찍는다.
+  // 대상지를 바꾼 직후에는 앞 대상지 것이 남아 있으므로 주인이 맞을 때만 쓴다.
+  const EX = exExtraFor === current ? exExtra : null;
+  const strokeLines = (key, stroke, lw, dash) => {
+    const lines = EX && EX[key];
+    if(!on(key) || !lines || !lines.length) return;
+    ctx.strokeStyle = stroke; ctx.lineWidth = lw;
+    if(dash) ctx.setLineDash(dash);
+    ctx.beginPath();
+    for(const ln of lines){
+      for(let i = 0; i < ln.length; i++){
+        const q = PC(ln[i][0], ln[i][1]);
+        i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]);
+      }
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  };
+
+  // 아래에서 위로 — 지형이 가장 밑, 건물이 가장 위
+  strokeLines("terrain",  "#d9bb96", 0.35);
+  strokeLines("zone",     "#8fa4d8", 0.55);
+  strokeLines("planroad", "#d59a9a", 0.6, [5, 3]);
+  strokeLines("district", "#b083cf", 0.9, [7, 3]);
+  strokeLines("road",     "#c9d0da", 0.5);
+
+  // DXF 는 도면이다 — 면이 아니라 선만 나간다. 미리보기도 선으로만 보여야
+  // 실제로 받는 것과 같다. 넓은 범위에서는 선이 서로 붙으므로 더 가늘게.
+  const wide = w > 900;
+  paint(parcelLayer, on("parcel"), wide ? "#b7bec9" : "#9aa3b2", null, wide ? 0.25 : 0.4);
+  paint(bldgLayer,   on("bldg"),   wide ? "#4e8168" : "#2f6f4e", null, wide ? 0.3 : 0.5);
+
+  ctx.restore();
+
+  // 경계선 — 잘린 자리를 눈으로 확인할 수 있게 자르기 밖에서 덧그린다
+  ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+  if(clip){
+    ctx.beginPath();
+    clip.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+    ctx.closePath();
+    ctx.strokeStyle = exScope === "area" ? "#6fbf8b" : "#c8791f";
+    ctx.stroke();
+  } else if(exScope === "context"){
+    ctx.strokeStyle = "#e0b088";                 // 지도의 수집범위와 같은 색
+    ctx.strokeRect(ox, oy, w * s, hgt * s);
+  }
+  ctx.setLineDash([]);
+
+  const NAME = {road:"도로", zone:"용도지역", district:"지구단위계획",
+                planroad:"도시계획도로", terrain:"지형"};
+  // 켰지만 그릴 자료가 없는 것 — 수집이 안 됐거나 이 범위에 없는 레이어다
+  const missing = Object.keys(NAME).filter(k => on(k) && !(EX && EX[k] && EX[k].length));
+  let note = `가로 약 <b>${w.toFixed(0)} m</b>`;
+  if(!EX) note += "<br>나머지 레이어 불러오는 중…";
+  else if(missing.length)
+    note += `<br>${missing.map(k => NAME[k]).join(" · ")} 은 이 범위에 없습니다.`;
+  document.getElementById("exm-hint").innerHTML = note;
+}
+
+function openExportModal(){
+  if(!current) return alert("먼저 CONTEXT 를 고르세요.");
+  if(exScope === "design" && !picked.size)
+    return alert("DESIGN AREA 로 고른 필지가 없습니다.");
+  if(exScope === "area" && exPts.length < 3)
+    return alert("내보낼 범위를 그려 주세요.");
+  const what = {context:"01 CONTEXT 수집 범위 전체", project:"02 PROJECT SITE 경계 안",
+                design:"03 DESIGN AREA — 고른 필지만", area:"따로 지정한 범위"}[exScope];
+  Q("#exm-scope").textContent = what;
+  const t = document.querySelector('#exm-layers input[data-l="terrain"]');
+  if(t){ t.disabled = !hasTerrain; if(!hasTerrain) t.checked = false; }
+  Q("#exmodal").style.display = "flex";
+  loadExportExtra();
+  setTimeout(drawExportPreview, 30);
+}
+
+function closeExportModal(){ Q("#exmodal").style.display = "none"; }
+
+async function runExport(){
+  const siteName = current;
+  if (!siteName) return;
+  const layers = [...document.querySelectorAll("#exm-layers input:checked")]
+                   .map(i => i.dataset.l);
+  if(!layers.length) return alert("적어도 하나는 골라 주세요.");
+  closeExportModal();
+  const wantTerrain = layers.includes("terrain");
+  const body = {scope: exScope, pnus: [...picked.keys()],
+                ring: exPts.map(p => [p.lng, p.lat]),
+                layers: layers.filter(l => l !== "terrain")};
+  const btn = Q("#ex-go");
+  btn.disabled = true;
+  log(`${Q("#exm-scope").textContent} · ${layers.length}종 내보내는 중…`, true);
+  try {
+    if(body.layers.length){
+      const r = await fetch(DRAW.siteURL(siteName, "/export"), {
+        method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
+      });
+      const j = await r.json();
+      if(!r.ok){ log("!! " + (j.detail || r.statusText)); return; }
+      (j.log || []).forEach(l => log(l));
+      location.href = DRAW.siteURL(siteName, "/download/") +
+                      (j.download_kind || (j.kind === "selected" ? "dxf_selected" : "dxf"));
+    }
+    if(wantTerrain){
+      await new Promise(r2 => setTimeout(r2, 1200));   // 두 파일을 잇달아 받는다
+      log("지형 DXF 도 함께 받습니다.");
+      location.href = DRAW.siteURL(siteName, "/download/dxf_terrain");
+    }
+  } catch(e){
+    log("!! 내보내지 못했습니다 — " + (e.message || e));
+  } finally { btn.disabled = false; }
+}
+
+// ══════════════════════════════════════════ 04 내보내기
+let exScope = "context";
+let exPts = [], exLayer = null, exDots = [], exGhost = null;
+
+function exRedraw(){
+  if(exLayer){ MAP.removeLayer(exLayer); exLayer = null; }
+  exDots.forEach(d => MAP.removeLayer(d)); exDots = [];
+  if(exPts.length){
+    const closed = exPts.length >= 3;
+    const st = {color:"#6fbf8b", weight:2, dashArray:"6 4", fillOpacity: closed ? .06 : 0,
+                interactive: false};
+    exLayer = (closed ? L.polygon(exPts, st) : L.polyline(exPts, st)).addTo(MAP);
+    if(boxMode === "expoly")
+      exPts.forEach(p => exDots.push(L.circleMarker(p,
+        {radius:4, color:"#6fbf8b", fillColor:"#6fbf8b", fillOpacity:1, weight:1,
+         interactive:false}).addTo(MAP)));
+  }
+  Q("#ex-undo").disabled = !exPts.length;
+  Q("#ex-clear").disabled = !exPts.length;
+  const info = Q("#ex-info");
+  if(exPts.length >= 3){
+    const b = L.latLngBounds(exPts), [w,hh] = boxSize(b);
+    info.innerHTML = `<b>${exPts.length}점</b> · 외곽 ${w.toFixed(0)} × ${hh.toFixed(0)} m`;
+  } else if(exPts.length){
+    info.innerHTML = `${exPts.length}점 — 세 점 이상 필요합니다. Enter 로 확정.`;
+  } else {
+    info.innerHTML = "내보낼 범위를 지도에서 그리세요.";
+  }
+}
+
+function exClear(){
+  exPts = [];
+  if(exGhost){ MAP.removeLayer(exGhost); exGhost = null; }
+  exRedraw();
+}
+
+function setExScope(s){
+  exScope = s;
+  document.querySelectorAll("#ex-scope button").forEach(
+    b => b.classList.toggle("on", b.dataset.scope === s));
+  Q("#ex-areabox").style.display = s === "area" ? "block" : "none";
+  if(s !== "area" && (boxMode === "exrect" || boxMode === "expoly")) setBoxMode(null);
+}
+
+async function exportDXF(){
+  if(!current) return alert("먼저 CONTEXT 를 고르세요.");
+  const btn = Q("#ex-go");
+  btn.disabled = true;
+  const body = {scope: exScope, pnus: [...picked.keys()],
+                ring: exPts.map(p => [p.lng, p.lat])};
+  const what = {context:"01 CONTEXT 전체", project:"02 PROJECT SITE",
+                design:"03 DESIGN AREA", area:"지정한 범위"}[exScope];
+  log(`${what} 로 DXF 만드는 중…`, true);
+  try {
+    const r = await fetch(DRAW.siteURL(current, "/export"), {
+      method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if(!r.ok){ log("!! " + (j.detail || r.statusText)); return; }
+    (j.log || []).forEach(l => log(l));
+    log("내려받는 중…");
+    location.href = DRAW.siteURL(current, "/download/") +
+                    (j.kind === "selected" ? "dxf_selected" : "dxf");
+  } catch(e){
+    log("!! 내보내지 못했습니다 — " + (e.message || e));
+  } finally { btn.disabled = false; }
+}
+
+
+// 필터는 지도 오른쪽, 레이어 켜고 끄는 자리 옆으로 옮긴다.
+// 지도를 보면서 조건을 바꿔야 하는 일이라 왼쪽 패널보다 여기가 맞다.
+function bindRightPanel(){
+  // 필터 여닫이는 여기서 하지 않는다 — CSS 의 .rp-expcb:checked 가 맡는다.
+  // 필터도 HTML 에서부터 슬롯 안에 있다. 옮기지도, 감추지도 않는다.
+
+  document.querySelectorAll(".rp-base button").forEach(btn => btn.onclick = () => {
+    document.querySelectorAll(".rp-base button").forEach(x => x.classList.toggle("on", x === btn));
+    const on = btn.dataset.base === "sat" ? TILE.sat : TILE.base;
+    const off = btn.dataset.base === "sat" ? TILE.base : TILE.sat;
+    if(MAP.hasLayer(off)) MAP.removeLayer(off);
+    if(!MAP.hasLayer(on)) on.addTo(MAP);
+  });
+
+  const bind = (id, get) => {
+    const el = document.getElementById(id);
+    if(el) el.onchange = () => {
+      const lyr = get(); if(!lyr) return;
+      el.checked ? MAP.addLayer(lyr) : MAP.removeLayer(lyr);
+    };
+  };
+  bind("L-hyb",    () => TILE.hyb);
+  bind("L-parcel", () => parcelLayer);
+  bind("L-bldg",   () => bldgLayer);
+  // 수집범위 선과 그 바깥 그늘은 한 몸이다
+  const ex = document.getElementById("L-extent");
+  if(ex) ex.onchange = () => {
+    for(const lyr of [extentBox, extentVeil]){
+      if(!lyr) continue;
+      ex.checked ? MAP.addLayer(lyr) : MAP.removeLayer(lyr);
+    }
+    if(extentVeil && ex.checked) extentVeil.bringToBack();
+  };
+
+  document.getElementById("rp-toggle").onclick = () =>
+    document.getElementById("rightpanel").classList.toggle("folded");
+
+  bindPanelGrip();
+  setPanelReady(false);
+}
+
+// 레이어 패널 높이 조절 — 아래 손잡이를 끈다.
+// 필터를 펴면 목록이 길어져 기본 높이(화면의 60%)로는 모자랄 때가 있다.
+function bindPanelGrip(){
+  const grip = document.getElementById("rp-grip");
+  const body = document.querySelector(".rp-body");
+  if(!grip || !body) return;
+
+  const setH = px => {
+    // 위로는 머리말 한 줄, 아래로는 화면 끝까지 — 지도가 아주 안 보이지는 않게
+    const h = Math.max(80, Math.min(px, window.innerHeight - 90));
+    document.documentElement.style.setProperty("--rp-h", h + "px");
+    LS.set("rp-h", h);
+  };
+  const saved = +LS.get("rp-h", 0);
+  if(saved > 0) setH(saved);
+
+  // 지금 정해진 높이. 내용이 짧으면 body 는 그보다 작아지므로 그걸 시작점으로 삼으면
+  // 끌기 시작할 때 패널이 튄다. 정해 둔 값이 있으면 그 값에서 이어 간다.
+  const cur = () => {
+    const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--rp-h"));
+    return v > 0 ? v : body.clientHeight;
+  };
+
+  grip.onmousedown = e => {
+    e.preventDefault();
+    const y0 = e.clientY, h0 = cur();
+    const move = ev => setH(h0 + ev.clientY - y0);
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+    document.body.style.cursor = "ns-resize";
+  };
+  // 두 번 누르면 기본값으로. 너무 줄여 놓고 되돌리지 못하는 일이 없게.
+  grip.ondblclick = () => {
+    document.documentElement.style.removeProperty("--rp-h");
+    LS.del("rp-h");
+  };
+}
+
+/** 대상지를 고르기 전에는 켤 레이어가 없다. 패널은 보이되 조작만 잠근다. */
+function setPanelReady(on){
+  const rp = document.getElementById("rightpanel");
+  if(!rp) return;
+  rp.classList.toggle("waiting", !on);
+  ["L-parcel", "L-bldg", "L-extent"].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.disabled = !on;
+  });
+  // 필터 여는 단추는 잠그지 않는다 — 애초에 CSS 로만 도는 라벨이라 잠글 것도 없다.
+  // 대상지 전에는 칸이 비어 있을 뿐이고, 왜 비었는지는 슬롯 안 안내가 말해 준다.
+  document.querySelectorAll(".rp-note").forEach(p => p.style.display = on ? "none" : "block");
+  const sum = document.getElementById("rp-sum");
+  if(sum) sum.textContent = on ? (current || "") : "대상지를 고르세요";
+}
+
+// ─────────────────────── 단계별 확정 — 접고, 무엇을 골랐는지 제목에 남긴다
+// 01~04 는 작업 흐름에 따라 접혔다 펴진다. 이 상태는 저장하지 않는다.
+// 저장하면 01 이 접힌 채로 열려 CONTEXT 를 고를 드롭다운이 숨는다 — 빠져나올 길이 없어진다.
+const STAGE_SECS = ["ctxsec", "psitebox", "selbox", "outbox", "psbox"];
+
+function foldSec(id, badgeId, text){
+  const sec = document.getElementById(id);
+  if(sec) sec.classList.add("folded");
+  const b = document.getElementById(badgeId);
+  if(b) b.textContent = text || "";
+}
+
+function unfoldSec(id){
+  const sec = document.getElementById(id);
+  if(sec) sec.classList.remove("folded");
+}
+
+/** 대상지가 없으면 02~04 는 아직 못 쓴다. 감추지 말고 그렇다고 알리기만 한다.
+ *  감춰 버리면 처음 켠 사람이 앞으로 무엇을 하게 되는지 알 수 없다. */
+function markStages(){
+  for(const id of ["psitebox", "selbox", "outbox"]){
+    const el = document.getElementById(id);
+    if(el) el.classList.toggle("waiting", !current);
+  }
+}
+
+/** 한 번에 한 단계만 편다. 확정할 때마다 다음 단계로 넘어간다. */
+function openStage(id){
+  STAGE_SECS.forEach(s => {
+    const el = document.getElementById(s);
+    if(el) el.classList.toggle("folded", s !== id);
+  });
+}
+
+function fmtArea(m2){
+  return m2 >= 10000 ? `${(m2/10000).toFixed(2)} ha` : `${Math.round(m2)} m²`;
+}
+
+// ─────────────────────────────────────────── 수집 진행률
+function showProgress(pct, phase){
+  const wrap = Q("#progwrap");
+  if(pct === undefined || pct === null){ return; }
+  wrap.style.display = "block";
+  const p = Math.max(0, Math.min(100, pct));
+  Q("#progfill").style.width = p.toFixed(1) + "%";
+  Q("#progfill").classList.toggle("done", p >= 100);
+  Q("#progpct").textContent = Math.round(p) + "%";
+  if(phase) Q("#progphase").textContent = phase;
+}
+
+function hideProgress(){ Q("#progwrap").style.display = "none"; }
+
+// ────────────────────────────────────────── 주소 드롭다운 (서울 구·법정동)
+let ADMIN = null;
+let DONG_BOUNDARY = null;   // 동까지만 골랐을 때 그 동 전체 경계
+
+async function initAddress(){
+  try { ADMIN = await (await fetch("/api/admin")).json(); }
+  catch(e){ return; }
+  const gu = Q("#a-gu");
+  const entries = Object.entries(ADMIN.gu || {});
+  if(!entries.length){
+    Q("#a-preview").textContent = ADMIN.note || "목록을 불러오지 못했습니다.";
+    return;
+  }
+  gu.innerHTML = `<option value="">— 선택 —</option>` +
+      entries.map(([code, g]) => `<option value="${esc(code)}">${esc(g.name)}</option>`).join("");
+
+  gu.onchange = () => {
+    const g = (ADMIN.gu || {})[gu.value];
+    Q("#a-dong").innerHTML = g
+      ? `<option value="">— 선택 —</option>` +
+        g.dong.map(d => `<option value="${esc(d.code)}">${esc(d.name)}</option>`).join("")
+      : `<option value="">구를 먼저 고르세요</option>`;
+    syncAddress();
+  };
+  Q("#a-dong").onchange = loadDongBoundary;
+  Q("#a-bunji").oninput  = syncAddress;
+  syncAddress();
+}
+
+function currentDong(){
+  const g = (ADMIN && ADMIN.gu || {})[Q("#a-gu").value];
+  if(!g) return null;
+  return g.dong.find(d => d.code === Q("#a-dong").value) || null;
+}
+
+// 고른 값으로 실제 조회에 쓸 주소 문자열을 만든다
+async function loadDongBoundary(){
+  const d = currentDong();
+  DONG_BOUNDARY = null;
+  if(!d) return;
+  try {
+    const r = await fetch(`/api/district/${d.code}`);
+    if(r.ok) DONG_BOUNDARY = await r.json();
+  } catch(e){ /* 경계를 못 받으면 동 중심 + 반경으로 되돌아간다 */ }
+  syncAddress();
+}
+
+function syncAddress(){
+  const g = (ADMIN && ADMIN.gu || {})[Q("#a-gu").value];
+  const d = currentDong();
+  const bunji = Q("#a-bunji").value.trim();
+  let text = "";
+  if(g && d) text = `${ADMIN.sido} ${g.name} ${d.name}${bunji ? " " + bunji : ""}`;
+  Q("#addr").value = text;
+
+  const note = Q("#a-preview");
+  if(!text){
+    note.innerHTML = g ? "동을 고르세요." : "구 → 동을 고르세요.";
+  } else if(bunji){
+    note.innerHTML = `<b>${esc(text)}</b><br>이 지번을 찾아 중심으로 씁니다.`;
+  } else if(DONG_BOUNDARY && DONG_BOUNDARY.bbox){
+    const bb = DONG_BOUNDARY.bbox;
+    const midLat = (bb[1] + bb[3]) / 2;
+    const w = (bb[2]-bb[0]) * 111320 * Math.cos(midLat*Math.PI/180);
+    const hgt = (bb[3]-bb[1]) * 111320;
+    note.innerHTML = `<b>${esc(text)} 전체</b><br>` +
+      `동 경계 그대로 잡습니다 — 약 <b>${w.toFixed(0)} × ${hgt.toFixed(0)} m</b>` +
+      (DONG_BOUNDARY.parts > 1 ? `<br>떨어진 부속지 ${DONG_BOUNDARY.parts-1}곳은 뺍니다.` : "");
+  } else {
+    note.innerHTML = `<b>${esc(text)}</b><br>번지가 없어 <b>${esc(d.name)} 중심</b>(${d.lat.toFixed(5)}, ${d.lon.toFixed(5)})에서 반경만큼 잡습니다.`;
+  }
+  return text;
+}
+
+// ─────────────────────────────────── 영역 드래그 (선택용 / 분석범위 지정용)
+let boxMode = null;          // null | "select" | "area" | "poly" | "site" | "sitepoly" | "selpoly" | "exrect" | "expoly"
+let dragging = false, anchor = null, rubber = null;
+let areaBox = null, areaBounds = null;   // 분석 범위로 지정한 사각형
+let lastDrawn = null;                    // "rect" | "poly" — 마지막에 그린 것
+
+/** 그려 둔 범위를 전부 지운다. 분석이 끝났거나 대상지를 바꿀 때 부른다.
+ *  이걸 안 하면 예전 도형이 남아 다음 분석에 그대로 쓰인다. */
+function clearArea(){
+  if(areaBox){ MAP.removeLayer(areaBox); areaBox = null; }
+  areaBounds = null;
+  lastDrawn = null;
+  polyClear();
+}
+
+function setBoxMode(mode){
+  if(mode) stopParcelPickModes();
+  boxMode = mode;
+  Q("#boxsel").classList.toggle("on", mode === "select");
+  Q("#drawarea").classList.toggle("on", mode === "area");
+  if(mode !== "area" && mode !== "site")
+    document.querySelectorAll(".ddmenu.open").forEach(m => m.classList.remove("open"));
+  Q("#drawpoly").classList.toggle("on", mode === "poly");
+  Q("#ps-rect").classList.toggle("on", mode === "site");
+  Q("#ps-poly").classList.toggle("on", mode === "sitepoly");
+  Q("#dspoly").classList.toggle("on", mode === "selpoly");
+  Q("#ex-poly").classList.toggle("on", mode === "expoly");
+  Q("#ex-ratio-dd").classList.toggle("muted", mode === "expoly");
+  // 사각형과 점찍기는 둘 중 하나다. 점찍기를 고르면 비율은 쓸 수 없게 흐린다.
+  Q("#a-ratio-dd").classList.toggle("muted", mode === "poly");
+  Q("#ds-ratio-dd").classList.toggle("muted", mode === "selpoly");
+  Q("#ps-ratio-dd").classList.toggle("muted", mode === "sitepoly");
+  Q("#map").classList.toggle("boxing", !!mode);
+  // 사각형 드래그는 우리가 쓰므로 지도 패닝을 끈다.
+  // 점 찍기는 클릭만 쓰므로 지도를 끌 수 있게 그대로 둔다.
+  if(mode && mode !== "poly" && mode !== "sitepoly" && mode !== "selpoly" && mode !== "expoly"){
+    MAP.dragging.disable(); MAP.boxZoom.disable(); }
+  else { MAP.dragging.enable(); MAP.boxZoom.enable(); }
+  // 더블클릭을 확정에 쓰므로 그동안은 더블클릭 확대를 끈다
+  if(mode === "poly" || mode === "sitepoly" || mode === "selpoly" || mode === "expoly") MAP.doubleClickZoom.disable();
+  else MAP.doubleClickZoom.enable();
+  if(mode !== "poly" && polyGhost){ MAP.removeLayer(polyGhost); polyGhost = null; }
+  // PROJECT SITE 쪽도 같다. 안 끊으면 확정한 뒤에도 마지막 점에서 마우스까지
+  // 선이 남아 경계가 삐죽 나온 것처럼 보인다.
+  if(mode !== "sitepoly" && psGhost){ MAP.removeLayer(psGhost); psGhost = null; }
+  if(mode !== "selpoly" && dsGhost){ MAP.removeLayer(dsGhost); dsGhost = null; }
+  if(mode !== "expoly" && exGhost){ MAP.removeLayer(exGhost); exGhost = null; }
+
+  // 그리는 동안에는 필지·건물 도형이 클릭을 가로채지 못하게 한다.
+  // 안 그러면 점을 찍어도 필지 팝업만 열리고 지도까지 클릭이 오지 않는다.
+  const pane = MAP.getPane("overlayPane");
+  if(pane) pane.style.pointerEvents = mode ? "none" : "";
+  if(mode) MAP.closePopup();
+}
+
+
+// 드래그 비율 고정 — 끄는 방향은 살리고 가로:세로 비만 맞춘다.
+// 위경도 1도의 실제 거리가 가로·세로가 달라서, 미터로 환산해 비를 맞춘 뒤 되돌린다.
+function ratioBounds(a, b){
+  const sel = boxMode === "site" ? "#ps-ratio"
+            : boxMode === "select" ? "#ds-ratio"
+            : boxMode === "exrect" ? "#ex-ratio" : "#a-ratio";
+  const r = parseFloat(Q(sel) ? Q(sel).value : "0") || 0;
+  if(!r) return L.latLngBounds(a, b);
+  const midLat = (a.lat + b.lat) / 2;
+  const mPerLat = 111320;
+  const mPerLon = 111320 * Math.cos(midLat * Math.PI / 180);
+  let w = Math.abs(b.lng - a.lng) * mPerLon;   // 가로(m)
+  let h = Math.abs(b.lat - a.lat) * mPerLat;   // 세로(m)
+  if(w < 1 && h < 1) return L.latLngBounds(a, b);
+  // 끈 만큼은 담기도록 더 큰 쪽에 맞춘다
+  if(w / (h || 1) > r) h = w / r; else w = h * r;
+  const dLon = (w / mPerLon) * (b.lng >= a.lng ? 1 : -1);
+  const dLat = (h / mPerLat) * (b.lat >= a.lat ? 1 : -1);
+  return L.latLngBounds(a, L.latLng(a.lat + dLat, a.lng + dLon));
+}
+
+// 위경도 사각형의 대략적인 크기(m)
+function boxSize(b){
+  const mid = (b.getNorth() + b.getSouth()) / 2;
+  return [ (b.getEast()-b.getWest()) * 111320 * Math.cos(mid*Math.PI/180),
+           (b.getNorth()-b.getSouth()) * 111320 ];
+}
+
+/** 그린 영역 안에 **온전히** 들어온 필지만 고른다.
+ *  경계에 걸친 필지는 뺀다 — 설계 범위는 필지 단위로 딱 떨어져야 한다. */
+function selectInside(hit, subtract){
+  let n = 0, edge = 0;
+  parcelLayer.eachLayer(l => {
+    const p = l.feature.properties;
+    if(!subtract && picked.has(p.pnu)) return;
+    if(subtract && !picked.has(p.pnu)) return;
+    if(!subtract && matched && !matched.has(p.pnu)) return;   // 필터가 켜졌으면 통과한 것만
+    const r = hit(l);
+    if(r === true){
+      if(subtract) picked.delete(p.pnu);
+      else picked.set(p.pnu, {jibun:p.jibun || p.pnu, area:p["필지면적_m2"] || 0});
+      l.setStyle(parcelStyle(l.feature));
+      n++;
+    } else if(r === "edge") edge++;
+  });
+  renderPicked();
+  log(`DESIGN AREA: ${n}필지 ${subtract ? "제외" : "추가"} (총 ${picked.size})` +
+      (edge && !subtract ? ` · 경계에 걸친 ${edge}필지는 뺐습니다` : ""));
+}
+
+function onSelectDrag(bounds, subtract){
+  selectInside(l => {
+    const b = l.getBounds();
+    if(bounds.contains(b)) return true;                 // 온전히 안쪽
+    return bounds.intersects(b) ? "edge" : false;       // 걸친 것
+  }, subtract);
+}
+
+/** 점으로 그린 다각형 안에 온전히 들어왔는지. 꼭짓점이 전부 안에 있으면 통과. */
+function ptInPoly(pt, ring){
+  let inside = false;
+  for(let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+    const a = ring[i], b = ring[j];
+    if(((a.lat > pt.lat) !== (b.lat > pt.lat)) &&
+       (pt.lng < (b.lng - a.lng) * (pt.lat - a.lat) / (b.lat - a.lat) + a.lng))
+      inside = !inside;
+  }
+  return inside;
+}
+
+function onSelectPoly(ring, subtract){
+  selectInside(l => {
+    const pts = [];
+    const g = l.getLatLngs();
+    (function walk(x){ Array.isArray(x) ? x.forEach(walk) : pts.push(x); })(g);
+    let inn = 0;
+    for(const p of pts) if(ptInPoly(p, ring)) inn++;
+    if(inn === pts.length) return true;
+    return inn > 0 ? "edge" : false;
+  }, subtract);
+}
+
+function onAreaDrag(bounds){
+  if(areaBox) MAP.removeLayer(areaBox);
+  polyClear();                 // 사각형을 새로 끌면 점으로 그린 것은 버린다
+  areaBounds = bounds;
+  lastDrawn = "rect";
+  areaBox = L.rectangle(bounds, {color:"#e0b088", weight:2, dashArray:"6 4",
+                                 fillOpacity:.08}).addTo(MAP);
+  const [w,h] = boxSize(bounds);
+  const over = (w > 5000 || h > 5000);
+  Q("#areainfo").innerHTML = over
+    ? `<b>영역이 너무 넓습니다</b> — 약 ${(w/1000).toFixed(2)} × ${(h/1000).toFixed(2)} km<br>한 변 5km 이내로 다시 잡아주세요.`
+    : `지정된 범위 <b>${w.toFixed(0)} × ${h.toFixed(0)} m</b>
+       (약 ${(w*h/10000).toFixed(1)} ha)<br>«분석 시작»을 누르세요. 다시 끌면 새로 지정됩니다.`;
+}
+
+// ───────────────────────────────────────── 점 찍어 경계 그리기
+//
+// 사각형으로는 딸 수 없는 경계(구역계·블록)를 따라 찍는다.
+// 수집 자체는 브이월드가 bbox 로만 되므로 **테두리의 외접 사각형**으로 받고,
+// 그린 경계는 따로 저장해 도판에 「구역 경계」 레이어로 남긴다.
+
+let polyPts = [];            // [L.LatLng]
+let polyLine = null, polyGhost = null, polyDots = [];
+
+function polyBounds(){
+  return polyPts.length >= 3 ? L.latLngBounds(polyPts) : null;
+}
+
+function polyArea(pts){      // 구면 근사. ha 단위 어림치면 충분하다
+  if(pts.length < 3) return 0;
+  const lat0 = pts.reduce((a,p) => a + p.lat, 0) / pts.length;
+  const kx = 111320 * Math.cos(lat0 * Math.PI/180), ky = 111320;
+  let s = 0;
+  for(let i = 0; i < pts.length; i++){
+    const a = pts[i], b = pts[(i+1) % pts.length];
+    s += (a.lng*kx) * (b.lat*ky) - (b.lng*kx) * (a.lat*ky);
+  }
+  return Math.abs(s) / 2;
+}
+
+function polyRedraw(){
+  if(polyLine) MAP.removeLayer(polyLine);
+  polyDots.forEach(d => MAP.removeLayer(d));
+  polyDots = [];
+  polyLine = null;
+
+  if(polyPts.length){
+    const closed = polyPts.length >= 3;
+    // 확정하면 실선·짙은 채움으로 바뀌어 「끝났다」가 눈에 보인다
+    const style = polyDoneFlag
+      ? {color:"#e0b088", weight:2.5, fillOpacity:.18}
+      : {color:"#e0b088", weight:2, dashArray:"6 4", fillOpacity:.08};
+    polyLine = (closed ? L.polygon(polyPts, style)
+                       : L.polyline(polyPts, style)).addTo(MAP);
+    if(!polyDoneFlag) polyPts.forEach((p, i) => polyDots.push(
+      L.circleMarker(p, {radius:4, color:"#e0b088", weight:2,
+        fillColor:i === 0 ? "#e0b088" : "#1c1f26", fillOpacity:1}).addTo(MAP)));
+  }
+  Q("#polyundo").disabled = !polyPts.length;
+  Q("#polyclear").disabled = !polyPts.length;
+
+  const FINISH = `<b>우클릭</b> · <b>더블클릭</b> · <b>Enter</b> · 첫 점 다시 클릭 → 확정<br>
+     <b>Backspace</b> 한 점 취소 · <b>Esc</b> 그만두기`;
+  const b = polyBounds();
+  if(!b){
+    Q("#areainfo").innerHTML = polyPts.length
+      ? `점 <b>${polyPts.length}개</b> — 세 점 이상 찍으면 범위가 잡힙니다.<br>${FINISH}`
+      : `CONTEXT 범위를 지도에서 끌어서 지정하거나,<br><b>점 찍어 그리기</b>로 경계를 따라 찍으세요.`;
+    return;
+  }
+  const [w,h] = boxSize(b);
+  const ha = polyArea(polyPts) / 10000;
+  const over = (w > 5000 || h > 5000);
+  Q("#areainfo").innerHTML = over
+    ? `<b>영역이 너무 넓습니다</b> — 외접 사각형 ${(w/1000).toFixed(2)} × ${(h/1000).toFixed(2)} km`
+    : `점 <b>${polyPts.length}개</b> · 경계 안 <b>${ha.toFixed(1)} ha</b><br>
+       수집 범위(외접 사각형) <b>${w.toFixed(0)} × ${h.toFixed(0)} m</b><br>` +
+      (polyDoneFlag ? `<b style="color:#e0b088">확정됨</b> — «분석 시작»을 누르세요.`
+                    : FINISH);
+}
+
+function polyPush(latlng){
+  // 첫 점을 다시 누르면 닫는다
+  if(polyPts.length >= 3){
+    const p0 = MAP.latLngToContainerPoint(polyPts[0]);
+    const pn = MAP.latLngToContainerPoint(latlng);
+    if(p0.distanceTo(pn) < 12){ polyDone(); return; }
+  }
+  // 점을 찍기 시작하면 끌어 둔 사각형은 버린다
+  if(!polyPts.length && areaBox){ MAP.removeLayer(areaBox); areaBox = null; areaBounds = null; }
+  polyPts.push(latlng);
+  lastDrawn = "poly";
+  polyRedraw();
+}
+
+let polyDoneFlag = false;    // 확정했는지 — 확정하면 따라다니던 선을 끊는다
+
+function polyDone(){
+  if(polyPts.length < 3){
+    log("점을 세 개 이상 찍어야 경계가 닫힙니다.");
+    return false;
+  }
+  polyDoneFlag = true;
+  setBoxMode(null);                                  // 따라다니던 선을 여기서 끊는다
+  if(polyGhost){ MAP.removeLayer(polyGhost); polyGhost = null; }
+  polyRedraw();
+  log(`경계 확정 — ${polyPts.length}점`);
+  return true;
+}
+
+function polyClear(){
+  polyPts = [];
+  polyDoneFlag = false;
+  if(polyGhost){ MAP.removeLayer(polyGhost); polyGhost = null; }
+  polyRedraw();
+}
+
+function bindBoxSelect(){
+  // 선택지는 다른 곳을 누르거나 지도를 움직이면 사라진다
+  MAP.on("click movestart zoomstart", hidePickMenu);
+  // 빈 곳을 누르면 팝업도 닫는다 (closeOnClick 을 껐으므로 여기서 대신 한다).
+  // 팝업 안의 클릭은 위에서 막아 두어 여기까지 오지 않는다.
+  MAP.on("click", () => { if(!boxMode) MAP.closePopup(); });
+  document.addEventListener("keydown", e => {
+    if(e.key !== "Escape") return;
+    if(psPick || dsPick) stopParcelPickModes();
+    hidePickMenu(); MAP.closePopup();
+  });
+
+  MAP.on("click", e => {
+    if(boxMode === "poly") polyPush(e.latlng);
+    else if(boxMode === "sitepoly"){ psPts.push(e.latlng); psRedraw(); }
+    else if(boxMode === "selpoly"){ dsPts.push(e.latlng); dsRedraw(); }
+    else if(boxMode === "expoly"){ exPts.push(e.latlng); exRedraw(); }
+  });
+  // 우클릭·더블클릭으로 확정. 「다 그렸다」고 말할 방법이 없으면 선이 계속 따라다닌다.
+  MAP.on("contextmenu", e => {
+    if(boxMode !== "poly") return;
+    L.DomEvent.preventDefault(e.originalEvent);
+    polyDone();
+  });
+  MAP.on("dblclick", e => {
+    if(boxMode === "sitepoly"){
+      L.DomEvent.preventDefault(e.originalEvent);
+      setBoxMode(null); psRedraw();
+      return;
+    }
+    if(boxMode === "selpoly"){
+      L.DomEvent.preventDefault(e.originalEvent);
+      dsDone(e.originalEvent && e.originalEvent.ctrlKey);
+      return;
+    }
+    if(boxMode === "expoly"){
+      L.DomEvent.preventDefault(e.originalEvent);
+      setBoxMode(null); exRedraw();
+      return;
+    }
+    if(boxMode !== "poly") return;
+    L.DomEvent.preventDefault(e.originalEvent);
+    polyDone();
+  });
+  MAP.on("mousemove", e => {
+    if(boxMode === "expoly" && exPts.length){
+      const tail = [exPts[exPts.length-1], e.latlng];
+      if(exGhost) exGhost.setLatLngs(tail);
+      else exGhost = L.polyline(tail, {color:"#6fbf8b", weight:1.5,
+                                       dashArray:"4 4", opacity:.8}).addTo(MAP);
+      return;
+    }
+    if(boxMode === "selpoly" && dsPts.length){
+      const tail = [dsPts[dsPts.length-1], e.latlng];
+      if(dsGhost) dsGhost.setLatLngs(tail);
+      else dsGhost = L.polyline(tail, {color:"#e2564a", weight:1.5,
+                                       dashArray:"4 4", opacity:.8}).addTo(MAP);
+      return;
+    }
+    if(boxMode === "sitepoly" && psPts.length){
+      const tail = [psPts[psPts.length-1], e.latlng];
+      if(psGhost) psGhost.setLatLngs(tail);
+      else psGhost = L.polyline(tail, {color:"#e0b088", weight:1.5,
+                                       dashArray:"4 4", opacity:.8}).addTo(MAP);
+      return;
+    }
+    if(boxMode !== "poly" || !polyPts.length) return;
+    const tail = [polyPts[polyPts.length-1], e.latlng];
+    if(polyGhost) polyGhost.setLatLngs(tail);
+    else polyGhost = L.polyline(tail, {color:"#e0b088", weight:1.5,
+                                       dashArray:"4 4", opacity:.8}).addTo(MAP);
+  });
+  document.addEventListener("keydown", e => {
+    if(boxMode === "select" && e.key === "Escape"){ setBoxMode(null); return; }
+    if(boxMode === "expoly"){
+      if(e.key === "Enter"){ e.preventDefault(); setBoxMode(null); exRedraw(); }
+      else if(e.key === "Escape"){ setBoxMode(null); exClear(); }
+      else if(e.key === "Backspace"){ e.preventDefault(); exPts.pop(); exRedraw(); }
+      return;
+    }
+    if(boxMode === "selpoly"){
+      if(e.key === "Enter"){ e.preventDefault(); dsDone(e.ctrlKey); }
+      else if(e.key === "Escape"){ setBoxMode(null); dsClear(); }
+      else if(e.key === "Backspace"){ e.preventDefault(); dsPts.pop(); dsRedraw(); }
+      return;
+    }
+    if(boxMode === "sitepoly"){
+      if(e.key === "Enter"){ e.preventDefault(); setBoxMode(null); psRedraw(); }
+      else if(e.key === "Escape"){ setBoxMode(null); psClear(); }
+      else if(e.key === "Backspace"){ e.preventDefault(); psPts.pop(); psRedraw(); }
+      return;
+    }
+    if(boxMode !== "poly") return;
+    if(e.key === "Enter"){ e.preventDefault(); polyDone(); }
+    else if(e.key === "Escape"){ setBoxMode(null); polyClear(); }
+    else if(e.key === "Backspace"){ e.preventDefault(); polyPts.pop(); polyRedraw(); }
+  }, true);   // 캡처 단계 — 주소칸이 Enter 를 먼저 먹고 분석을 시작하는 것을 막는다
+
+  MAP.on("mousedown", e => {
+    if(!boxMode || boxMode === "poly" || boxMode === "sitepoly"
+       || boxMode === "selpoly") return;
+    dragging = true; anchor = e.latlng;
+    const c = boxMode === "exrect" ? "#6fbf8b"
+            : (boxMode === "area" || boxMode === "site") ? "#e0b088" : "#e2564a";
+    const st = {color:c, weight:1.5, dashArray:"4 4", fillOpacity:.12};
+    const cfg = shapeCfg();
+    rubber = cfg.shape === "circle"
+      ? L.circle(anchor, {radius: cfg.cr || 1, ...st}).addTo(MAP)
+      : L.rectangle([anchor, anchor], st).addTo(MAP);
+    // 반경을 정해 둔 원은 끌 필요가 없다 — 누르는 순간 크기가 정해진다
+    if(cfg.shape === "circle" && cfg.cr) rubber.setLatLng(anchor);
+  });
+  MAP.on("mousemove", e => {
+    if(!dragging || !rubber) return;
+    const cfg = shapeCfg();
+    if(cfg.shape === "circle"){
+      rubber.setLatLng(anchor);
+      rubber.setRadius(cfg.cr || Math.max(1, anchor.distanceTo(e.latlng)));
+    } else {
+      rubber.setBounds(ratioBounds(anchor, e.latlng));
+    }
+  });
+  MAP.on("mouseup", e => {
+    if(!dragging || boxMode === "poly" || boxMode === "sitepoly"
+       || boxMode === "selpoly") return;
+    dragging = false;
+    const mode = boxMode;
+    const cfg = shapeCfg();
+    const isCircle = cfg.shape === "circle";
+    const radius = isCircle ? (cfg.cr || Math.max(1, anchor.distanceTo(e.latlng))) : 0;
+    const ring = isCircle ? circleRing(anchor, radius) : null;
+    const bounds = isCircle ? L.latLngBounds(ring) : ratioBounds(anchor, e.latlng);
+    if(rubber){ MAP.removeLayer(rubber); rubber = null; }
+    // 선택은 여러 번 그어 가며 쌓는 일이다. 한 번 긋고 꺼지면 매번 다시 켜야 한다.
+    // CONTEXT·PROJECT SITE 는 도형 하나를 정하는 것이라 한 번 긋고 끝낸다.
+    if(mode !== "select") setBoxMode(null);
+
+    const [w,h] = boxSize(bounds);
+    if(!(isCircle && cfg.cr) && (w < 20 || h < 20)) return;   // 클릭에 가까운 드래그는 무시
+    const corners = b => [b.getSouthWest(), b.getSouthEast(),
+                          b.getNorthEast(), b.getNorthWest()];
+    if(mode === "area") onAreaDrag(bounds);
+    else if(mode === "site"){ psPts = ring || corners(bounds); psRedraw(); }
+    else if(mode === "exrect"){ exPts = ring || corners(bounds); exRedraw(); }
+    else if(parcelLayer){
+      const sub = e.originalEvent && e.originalEvent.ctrlKey;
+      if(ring) onSelectPoly(ring, sub); else onSelectDrag(bounds, sub);
+    }
+  });
+}
+
+function clearSelection(){
+  const keys = [...picked.keys()];
+  picked.clear();
+  parcelLayer && parcelLayer.eachLayer(l => {
+    if(keys.includes(l.feature.properties.pnu)) l.setStyle(parcelStyle(l.feature));
+  });
+  renderPicked();
+}
+
+// ─────────────────────────────────────────────────────── 대상지 로드
+// 전국 NGII DEM이 설치되어 있으면 BBOX 도엽을 쓰고, 서울은 기존 등고선 자료로 내려간다.
+let hasTerrain = false;
+function setTerrain(hasDxf, hasCsv){
+  hasTerrain = !!hasDxf;
+  const t = document.querySelector('#exm-layers input[data-l="terrain"]');
+  if(t){ t.disabled = !hasDxf; if(!hasDxf) t.checked = false; }
+  const note = Q("#terrainnote");
+  if(hasDxf){ note.style.display = "none"; return; }
+  note.style.display = "block";
+  note.innerHTML = `이 영역의 지형 자료가 없습니다. 서울 밖은 국토정보플랫폼에서 받은
+    <b>NGII 공개 DEM ZIP·IMG·GeoTIFF</b>를 한 번 설치하면 이후 자동으로 선택합니다.
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="mkterrain" style="margin:0">지형 다시 찾기</button>
+      <button class="ghost" id="installdem" style="margin:0">NGII DEM 설치</button>
+    </div>`;
+  Q("#mkterrain").onclick = makeTerrain;
+  Q("#installdem").onclick = chooseTerrainDEM;
+}
+
+function chooseTerrainDEM(){
+  const input=document.createElement("input");
+  input.type="file";input.accept=".zip,.img,.tif,.tiff";
+  input.onchange=()=>input.files?.[0]&&uploadTerrainDEM(input.files[0]);
+  input.click();
+}
+
+function uploadTerrainDEM(file){
+  const btn=Q("#installdem");
+  if(btn){btn.disabled=true;btn.textContent="DEM 업로드 0%";}
+  const request=new XMLHttpRequest();
+  request.open("POST",`/api/terrain/import?filename=${encodeURIComponent(file.name)}`);
+  request.upload.onprogress=e=>{
+    if(btn&&e.lengthComputable)btn.textContent=`DEM 업로드 ${Math.round(e.loaded/e.total*100)}%`;
+  };
+  request.onerror=()=>{
+    log("DEM 설치 실패 · 네트워크 연결을 확인하세요.");
+    if(btn){btn.disabled=false;btn.textContent="NGII DEM 설치";}
+  };
+  request.onload=async()=>{
+    let data={};try{data=JSON.parse(request.responseText||"{}");}catch(_){ }
+    if(request.status<200||request.status>=300){
+      log("DEM 설치 실패\n"+(data.detail||request.responseText||"알 수 없는 오류"));
+      if(btn){btn.disabled=false;btn.textContent="NGII DEM 설치";}
+      return;
+    }
+    log(`NGII DEM ${data.added||0}개 도엽 설치 · 현재 ${data.tiles||0}개 · ${data.version||""}`);
+    if(btn)btn.textContent="지형 생성 중…";
+    await makeTerrain();
+  };
+  request.send(file);
+}
+
+async function makeTerrain(){
+  const btn = Q("#mkterrain");
+  btn.disabled = true; btn.textContent = "가져오는 중…";
+  try{
+    const r = await fetch(DRAW.siteURL(current, "/terrain"), {
+      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({}),
+    });
+    const d = await r.json();
+    if(!r.ok){ log("지형 실패\n" + (d.detail||"")); return; }
+    (d.log||[]).forEach(l => log(l));
+    siteSceneFingerprint=d.scene_fingerprint||siteSceneFingerprint;
+    DG.scene=null;dgLoadedFor=null;diagramAppliedState="";
+    setTerrain(d.has_terrain, d.has_spot);
+  } finally {
+    if(btn.isConnected){ btn.disabled = false; btn.textContent = "지형 가져오기"; }
+  }
+}
+
+let view = "site";
+let sub = "2d";              // 다이어그램 하위 탭 — 도판을 먼저 연다
+let dgLoadedFor = null;      // 다이어그램에 올려둔 대상지 (탭을 열 때만 받아온다)
+let diagramAppliedState = ""; // 마지막으로 다이어그램에 반영한 대지 지문
+let diagramTransitionSeq = 0;
+const ROAD_ANALYSIS_ATTEMPTED = new Set();
+
+function desiredBoundarySignature(){
+  return presetBoundaryPending ? boundarySignature(psPts) : appliedBoundarySignature;
+}
+
+function diagramSiteState(){
+  return JSON.stringify([
+    current || "",
+    siteSceneFingerprint || "",
+    desiredBoundarySignature(),
+  ]);
+}
+
+function setSiteChangePhase(text, title="대지 변경 중…"){
+  const t = Q("#site-change-title"), p = Q("#site-change-phase");
+  if(t) t.textContent = title;
+  if(p) p.textContent = text;
+}
+
+function beginSiteChangeOverlay(seq){
+  const overlay = Q("#site-change-overlay");
+  let shown = false, shownAt = 0;
+  // 캐시가 바로 맞으면 창이 한 프레임만 번쩍이는 대신 아예 보이지 않게 한다.
+  const timer = setTimeout(() => {
+    if(seq !== diagramTransitionSeq || view !== "diagram") return;
+    shown = true; shownAt = performance.now();
+    setSiteChangePhase("사이트 분석의 변경 내용을 다이어그램에 반영하고 있습니다.");
+    overlay.classList.add("on"); overlay.setAttribute("aria-hidden", "false");
+  }, 120);
+  return {
+    phase(text){ setSiteChangePhase(text); },
+    async close(error){
+      clearTimeout(timer);
+      if(error && !shown){
+        shown = true; shownAt = performance.now();
+        overlay.classList.add("on"); overlay.setAttribute("aria-hidden", "false");
+      }
+      if(error) setSiteChangePhase(error, "대지를 바꾸지 못했습니다");
+      if(shown){
+        const minimum = error ? 1100 : 420;
+        const wait = Math.max(0, minimum - (performance.now() - shownAt));
+        if(wait) await new Promise(resolve => setTimeout(resolve, wait));
+      }
+      overlay.classList.remove("on"); overlay.setAttribute("aria-hidden", "true");
+      setSiteChangePhase("사이트 분석의 변경 내용을 다이어그램에 반영하고 있습니다.");
+    }
+  };
+}
+
+function cancelDiagramTransition(){
+  diagramTransitionSeq++;
+  const overlay = Q("#site-change-overlay");
+  overlay.classList.remove("on"); overlay.setAttribute("aria-hidden", "true");
+}
+
+async function syncPresetBoundaryForDiagram(overlay){
+  if(!presetBoundaryPending || !current) return;
+  const site = current;
+  const ring = psPts.map(p => [p.lng, p.lat]);
+  overlay.phase("PROJECT SITE 경계를 새 프리셋에 맞추는 중…");
+  const r = await fetch(DRAW.siteURL(site, "/boundary"), {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ring}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(data.detail || "PROJECT SITE 경계를 적용하지 못했습니다.");
+  if(current !== site) throw new Error("대상지가 다시 바뀌었습니다.");
+  appliedBoundarySignature = boundarySignature(ring);
+  presetBoundaryPending = false;
+  log(data.note || "프리셋 PROJECT SITE 경계를 적용했습니다.");
+}
+
+function sceneNeedsRoadAnalysis(scene){
+  return !!scene && !(scene.road_analysis?.fields || []).length;
+}
+
+/** 예전 대상지는 프리셋·경계·선택 필지를 그대로 둔 채 중심선 속성만 자동 보충한다. */
+async function backfillRoadAnalysis(site, overlay){
+  if(!site || ROAD_ANALYSIS_ATTEMPTED.has(site)) return false;
+  ROAD_ANALYSIS_ATTEMPTED.add(site);
+  overlay.phase("기존 프리셋을 유지한 채 도로망 분석 자료를 보충하는 중…");
+  try{
+    const response=await fetch(DRAW.siteURL(site,"/road-analysis"),{method:"POST"});
+    const started=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(started.detail||"도로망 분석 자료를 준비하지 못했습니다.");
+    if(started.cached)return true;
+    const jobId=started.job_id;
+    if(!jobId)throw new Error("도로망 분석 작업 번호를 받지 못했습니다.");
+    while(true){
+      await new Promise(resolve=>setTimeout(resolve,250));
+      const r=await fetch(`/api/job/${encodeURIComponent(jobId)}`,{cache:"no-store"});
+      const job=await r.json().catch(()=>({}));
+      if(!r.ok)throw new Error(job.detail||"도로망 분석 진행률을 확인하지 못했습니다.");
+      overlay.phase(`${job.phase||"도로중심선 수집 중"} · ${Math.round(job.progress||0)}%`);
+      if(job.status==="done"){
+        log(`도로망 분석 자료 ${Number(job.count||0).toLocaleString()}건을 자동으로 보충했습니다.`,true);
+        return true;
+      }
+      if(job.status==="error")throw new Error((job.log||[]).slice(-1)[0]||job.phase||"수집 실패");
+    }
+  }catch(e){
+    log("!! 도로망 분석 자동 보충 실패 — "+(e.message||e));
+    return false;
+  }
+}
+
+async function enterDiagram(){
+  const seq = ++diagramTransitionSeq;
+  const hasPendingSiteWork = SITE_STATE_TASKS.size > 0;
+  const needsRefresh = hasPendingSiteWork || presetBoundaryPending || !current ||
+    dgLoadedFor !== current || !DG.scene || diagramAppliedState !== diagramSiteState();
+
+  if(!needsRefresh){
+    syncSelected();
+    if(sub === "2d") plan2Load(DG.scene); else render();
+    return;
+  }
+  if(!current && !hasPendingSiteWork){
+    Q("#dginfo").textContent = "대상지를 먼저 고르세요.";
+    DG.scene = null;
+    if(sub === "2d") plan2Load(null); else render();
+    return;
+  }
+
+  const overlay = beginSiteChangeOverlay(seq);
+  let failure = "";
+  try{
+    if(hasPendingSiteWork){
+      overlay.phase("사이트 프리셋 적용이 끝나기를 기다리는 중…");
+      await waitSiteState();
+    }
+    if(seq !== diagramTransitionSeq || view !== "diagram") return;
+    if(!current) throw new Error("대상지를 먼저 골라 주세요.");
+
+    await syncPresetBoundaryForDiagram(overlay);
+    if(seq !== diagramTransitionSeq || view !== "diagram") return;
+
+    syncSelected();
+    const state = diagramSiteState();
+    if(dgLoadedFor !== current || !DG.scene || diagramAppliedState !== state){
+      overlay.phase("대지 장면과 지형을 다시 만드는 중…");
+      const site = current;
+      const ok = await loadScene(site, DG.radiusReq);
+      if(!ok) throw new Error("다이어그램 장면을 불러오지 못했습니다.");
+      if(seq !== diagramTransitionSeq || view !== "diagram" || current !== site) return;
+      if(sub === "2d" && sceneNeedsRoadAnalysis(DG.scene)){
+        const filled=await backfillRoadAnalysis(site,overlay);
+        if(filled){
+          overlay.phase("기존 2D 프리셋에 도로망 분석 자료를 연결하는 중…");
+          const reloaded=await loadScene(site,DG.radiusReq);
+          if(!reloaded)throw new Error("도로망 분석 장면을 다시 불러오지 못했습니다.");
+          if(seq !== diagramTransitionSeq || view !== "diagram" || current !== site)return;
+        }
+      }
+      siteSceneFingerprint = DG.scene?._fingerprint || siteSceneFingerprint;
+      dgLoadedFor = site;
+      diagramAppliedState = diagramSiteState();
+    }
+  }catch(e){
+    failure = e && e.message ? e.message : String(e);
+    log("!! 다이어그램 대지 변경 실패 — " + failure);
+  }finally{
+    if(seq === diagramTransitionSeq) await overlay.close(failure);
+  }
+}
+
+// 하위 탭과 왼쪽 설정창, 오른쪽 캔버스, 제목·프리셋은 반드시 함께 움직인다.
+// 각각 따로 display를 바꾸면 버튼은 2D인데 설정창은 3D인 엇갈린 상태가 생긴다.
+function syncDiagramSubUI(){
+  const isDiagram = view === "diagram";
+  const is2d = sub === "2d";
+  document.querySelectorAll(".stab").forEach(
+    t => t.classList.toggle("on", t.dataset.sub === sub));
+  Q("#sub-2d").style.display    = is2d ? "" : "none";
+  Q("#sub-3d").style.display    = is2d ? "none" : "";
+  Q("#diagram2d").style.display = isDiagram && is2d ? "" : "none";
+  Q("#diagram").style.display   = isDiagram && !is2d ? "" : "none";
+  Q("#p2presets").style.display = isDiagram && is2d ? "" : "none";
+  Q("#d3presets").style.display = isDiagram && !is2d ? "" : "none";
+  if(isDiagram) Q("#apptitle").innerHTML = is2d
+    ? `다이어그램<small>2D 레이어 도판</small>`
+    : `다이어그램<small>축측 매스 · 지형</small>`;
+}
+
+function setSub(s){
+  sub = s === "3d" ? "3d" : "2d";
+  syncDiagramSubUI();
+  if(view !== "diagram") return;
+  if(sub === "3d" && DG.scene){
+    render();
+  }
+  if(sub === "2d"){
+    syncSelected();
+    if(sceneNeedsRoadAnalysis(DG.scene) && !ROAD_ANALYSIS_ATTEMPTED.has(current)){
+      diagramAppliedState = "";              // 중앙 안내창 안에서 자동 보충 경로로 보낸다
+      void enterDiagram();
+    }else plan2Load(DG.scene);
+  }
+}
+
+function setView(v){
+  view = v;
+  document.querySelectorAll(".vtab").forEach(t => t.classList.toggle("on", t.dataset.view === v));
+  Q("#pane-site").style.display    = v === "site" ? "" : "none";
+  Q("#pane-diagram").style.display = v === "diagram" ? "" : "none";
+  Q("#map").style.display          = v === "site" ? "" : "none";
+  // 레이어판은 지도의 것이다. 다이어그램에는 제 레이어 목록이 따로 있다.
+  Q("#rightpanel").style.display   = v === "site" ? "" : "none";
+  // 프리셋 번호칸도 탭마다 다른 것을 쓴다 — 담기는 것이 다르기 때문이다
+  Q("#presets").style.display      = v === "site" ? "" : "none";
+  syncDiagramSubUI();
+  Q("#apptitle").innerHTML = v === "site"
+    ? `사이트 분석<small>브이월드 + 건축물대장</small>`
+    : sub === "2d"
+      ? `다이어그램<small>2D 레이어 도판</small>`
+      : `다이어그램<small>축측 매스 · 지형</small>`;
+  document.querySelector(".legend").style.display = v === "site" ? "" : "none";
+  if(v === "site"){
+    cancelDiagramTransition();
+    setTimeout(() => MAP.invalidateSize(), 0);
+    return;
+  }
+
+  // 대상지·PROJECT SITE 지문이 마지막 장면과 다를 때만 중앙 오버레이 안에서
+  // 갱신한다. DESIGN AREA 선택은 장면 재생성 없이 즉시 동기화한다.
+  void enterDiagram();
+}
+
+// 대상지를 내려놓는다. 「— 선택 —」로 돌리거나 삭제했을 때 화면에 잔상이 남지 않게.
+function clearSite(){
+  siteLoadId++;
+  current = null; matched = null;
+  siteSceneFingerprint = "";
+  appliedBoundarySignature = boundarySignature([]);
+  presetBoundaryPending = false;
+  stopParcelPickModes();
+  picked.clear(); renderPicked();
+  for(const lyr of [parcelLayer, bldgLayer, extentBox, extentVeil]){
+    if(lyr) MAP.removeLayer(lyr);
+  }
+  parcelLayer = bldgLayer = extentBox = extentVeil = null;
+  psParcels = new Set(); psPick = null; psSnapInfo();
+  psClear(); exPts = []; exRedraw();
+  setBoxMode(null);
+  Q("#stats").innerHTML = "";
+  setPanelReady(false);
+  setTerrain(false, false);
+  Q("#terrainnote").style.display = "none";
+  DG.scene = null; dgLoadedFor = null; diagramAppliedState = "";
+  Q("#dginfo").textContent = "대상지를 먼저 고르세요.";
+  DG.aerial.source = DG.aerial.raw = DG.aerial.pixels = null;
+  DG.aerial.key = "";
+  plan2Load(null);
+}
+
+async function loadSiteCore(name){
+  if(!name){ clearSite(); return; }
+  clearSite();
+  const requestId = ++siteLoadId;
+  const isCurrent = () => siteLoadId === requestId && current === name;
+  ROAD_ANALYSIS_ATTEMPTED.delete(name);       // 다시 연 대상지는 실패했던 자동 보충도 재시도
+  current = name; picked.clear(); renderPicked();
+  log(`${name} 불러오는 중…`, true);
+
+  const res = await fetch(DRAW.siteURL(name));
+  const info = await res.json();
+  if (!isCurrent()) return false;
+  if(!res.ok){
+    // 폴더명이 어긋났거나 지워진 대상지. 조용히 실패하면 툴바가 안 뜬 이유를 알 수 없다.
+    log("!! " + (info.detail || `'${name}' 을 열지 못했습니다`));
+    clearSite();
+    await refreshSites();
+    return;
+  }
+  let pc, bd;
+  try {
+    [pc, bd] = await Promise.all(["/parcels", "/buildings"].map(async path => {
+      const response = await fetch(DRAW.siteURL(name, path));
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data.features))
+        throw new Error(data.detail || "필지·건물 자료를 불러오지 못했습니다.");
+      return data;
+    }));
+  } catch (error) {
+    if (isCurrent()) { log("!! " + error.message); clearSite(); }
+    return false;
+  }
+  if (!isCurrent()) return false;
+  siteSceneFingerprint = info.scene_fingerprint || "";
+  setTerrain(info.has_terrain, info.has_spot);
+  const [[s,w],[n,e]] = [[info.bbox[1],info.bbox[0]],[info.bbox[3],info.bbox[2]]];
+  MAP.fitBounds([[s,w],[n,e]]);
+
+  if(parcelLayer) MAP.removeLayer(parcelLayer);
+  if(bldgLayer)   MAP.removeLayer(bldgLayer);
+  if(extentBox)   MAP.removeLayer(extentBox);
+  extentBox = L.rectangle([[s,w],[n,e]],
+      {color:"#e0b088", weight:1.5, dashArray:"5 5", fill:false,
+       interactive:false}).addTo(MAP);
+  // 수집범위 밖은 덮어 어둡게 — 격자 가장자리에 걸린 필지가 통째로 딸려 와
+  // 어디까지가 분석 대상인지 눈으로 구분이 안 된다.
+  if(extentVeil) MAP.removeLayer(extentVeil);
+  const FAR = 1;                              // 지도를 넉넉히 덮을 만큼
+  extentVeil = L.polygon([
+      [[s-FAR, w-FAR], [s-FAR, e+FAR], [n+FAR, e+FAR], [n+FAR, w-FAR]],   // 바깥
+      [[s, w], [s, e], [n, e], [n, w]],                                    // 뚫는 구멍
+    ], {color:"#0e1013", weight:0, fillColor:"#0e1013", fillOpacity:.34,
+        interactive:false}).addTo(MAP);
+  extentVeil.bringToBack();
+
+  // 건물관리번호 앞 19자리가 PNU — 필터가 건물에도 걸리도록 옮겨 붙인다
+  bd.features.forEach(f => {
+    f.properties._pnu = String(f.properties.bd_mgt_sn || "").slice(0, 19);
+  });
+  PARCEL_BY_PNU = new Map(pc.features.map(f => [f.properties.pnu, f.properties]));
+
+  // 팝업은 레이어에 매지 않는다. 한 지점에 건물과 필지가 겹쳐 있을 때
+  // 무엇을 열지 우리가 정해야 하기 때문이다 (openInfo · showPickMenu 참고).
+  bldgLayer = L.geoJSON(bd, {
+    style: f => bldgStyle(f),
+    onEachFeature: (f, l) => l.on("click", e => onFeatureClick(e, "bldg", l)),
+  });
+  parcelLayer = L.geoJSON(pc, {
+    style: f => parcelStyle(f),
+    onEachFeature: (f, l) => l.on("click", e => {
+      l.setStyle(parcelStyle(f));
+      onFeatureClick(e, "parcel", l);
+    })
+  });
+  // 필지를 먼저 깔고 건물을 그 위에 올린다. 건물이 위에 있어야 클릭이 건물에 닿는다.
+  // 예전에는 반대라 건물을 눌러도 필지 팝업만 떴다.
+  if(Q("#L-parcel").checked) parcelLayer.addTo(MAP);
+  if(Q("#L-bldg").checked)   bldgLayer.addTo(MAP);
+  if(!Q("#L-extent").checked){ MAP.removeLayer(extentBox); MAP.removeLayer(extentVeil); }
+
+  markStages();
+  // 저장 경계가 늦게 도착해 프리셋 경계를 다시 덮는 순서 경쟁을 막는다.
+  await psLoad(name, isCurrent);
+  if (!isCurrent()) return false;
+
+  // 이 대목이 한 번 터지면 패널이 「대상지를 고르세요」에 갇혀 필터가 영영 안 열렸다.
+  // 무엇이 실패하든 패널만은 쓸 수 있는 상태로 열어 둔다.
+  try{
+    fillFilterOptions(pc.features);
+    resetFilter();
+    bindRightPanel();
+  }catch(e){
+    log("!! 필터를 준비하지 못했습니다: " + (e && e.message ? e.message : e));
+  }
+  setPanelReady(true);
+
+  const counts = Object.fromEntries((info.layers||[]).map(l => [l.name, l.count]));
+  const rb = info.resolved_by || {};
+  Q("#stats").innerHTML =
+    (rb.address ? `<div class="addr">${esc(rb.address)}` +
+        (rb.query && rb.query !== rb.address ? `<em>검색어: “${esc(rb.query)}”</em>` : "") +
+        (rb.radius_m ? `<em>반경 ${esc(rb.radius_m)}m</em>` : "") + `</div>` : "")
+    + Object.entries(counts).map(([k,v]) => `<div class="stat"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
+  // 한 단계를 확정하면 접고 다음 단계를 편다 — 01 → 02 → 03 → 04
+  foldSec("ctxsec", "ctx-badge", site_label(name, info));
+  openStage("psitebox");
+  log(`필지 ${pc.features.length} · 건물 ${bd.features.length}`);
+  log("필지를 클릭해 DESIGN AREA 를 고르세요.");
+  return true;
+}
+
+function loadSite(name){
+  const task = loadSiteCore(name);
+  const requestId = siteLoadId;
+  return trackSiteState(task.catch(error => {
+    if (requestId === siteLoadId) {
+      log("!! 대상지를 불러오지 못했습니다: " + (error.message || error));
+      clearSite();
+    }
+    return false;
+  }));
+}
+
+// ─────────────────────────────────────────────────────────── 분석
+let mode = "addr";
+function setMode(m){
+  mode = m;
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.mode === m));
+  Q("#mode-addr").style.display = m === "addr" ? "" : "none";
+  Q("#mode-area").style.display = m === "area" ? "" : "none";
+  if(m !== "area" && boxMode === "area") setBoxMode(null);
+}
+
+async function analyze(){
+  const body = {name: Q("#nm").value.trim() || null};
+  let label;
+
+  if(mode === "area"){
+    // **마지막에 그린 것**을 쓴다. 예전에 그린 도형이 남아 새 도형을 이기면
+    // 엉뚱한 곳의 데이터가 들어온다.
+    const pb = lastDrawn === "poly" ? polyBounds() : null;
+    let bounds = pb || (lastDrawn === "rect" ? areaBounds : null) || polyBounds() || areaBounds;
+    if(!bounds) return alert("지도에서 영역을 끌거나 점을 세 개 이상 찍으세요.");
+
+    // 반경을 넣으면 그린 도형은 **중심을 잡는 용도**로만 쓰고, 범위는 반경이 정한다
+    const rad = +Q("#arearadius").value;
+    if(rad > 0){
+      const c = bounds.getCenter();
+      const dLat = rad / 111320;
+      const dLon = rad / (111320 * Math.cos(c.lat * Math.PI/180));
+      bounds = L.latLngBounds([c.lat - dLat, c.lng - dLon], [c.lat + dLat, c.lng + dLon]);
+    }
+
+    const [w,h] = boxSize(bounds);
+    if(w > 5000 || h > 5000) return alert("영역이 너무 넓습니다. 한 변 5km 이내로 잡아주세요.");
+    body.bbox = [bounds.getWest(), bounds.getSouth(),
+                 bounds.getEast(), bounds.getNorth()];
+    if(rad > 0){
+      const c = bounds.getCenter();
+      label = `중심 ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)} · 반경 ${rad}m`;
+    } else if(pb){
+      body.boundary = polyPts.map(p => [p.lng, p.lat]);
+      label = `그린 경계 ${polyPts.length}점 (수집 ${w.toFixed(0)}×${h.toFixed(0)}m)`;
+    } else {
+      label = `지도 영역 ${w.toFixed(0)}×${h.toFixed(0)}m`;
+    }
+  } else {
+    const address = syncAddress();
+    if(!address) return alert("구와 동을 고르세요.");
+    const rad = +Q("#radius").value;
+    body.radius = rad;
+    const d = currentDong();
+    if(Q("#a-bunji").value.trim()){
+      body.address = address;            // 지번이 있으면 그걸 찾는다
+    } else if(DONG_BOUNDARY && DONG_BOUNDARY.bbox){
+      // 동까지만 골랐다 — 그 동 전체를 대상으로 잡고, 경계로 도면을 자른다
+      body.bbox = DONG_BOUNDARY.bbox;
+      body.boundary = DONG_BOUNDARY.ring;
+      body.address = address;
+    } else {
+      // 경계를 못 받았을 때만 동 대표좌표 + 반경으로 되돌아간다
+      const dLat = rad / 111320;
+      const dLon = rad / (111320 * Math.cos(d.lat * Math.PI/180));
+      body.bbox = [d.lon - dLon, d.lat - dLat, d.lon + dLon, d.lat + dLat];
+      body.address = address;
+    }
+    if(!body.name) body.name = address.replace(/^서울특별시\s*/, "");
+    label = address + (Q("#a-bunji").value.trim() ? ` · 반경 ${rad}m`
+                       : (DONG_BOUNDARY ? " 전체" : ` · 반경 ${rad}m`));
+  }
+
+  Q("#go").disabled = true;
+  Q("#log").innerHTML = "";
+  showProgress(0, "준비");
+  log("분석 시작: " + label, true);
+
+  // 요청이 아예 실패하면(네트워크 끊김·서버 다운) 버튼이 잠긴 채로 남는다.
+  // 그러면 새로고침 말고는 되살릴 방법이 없으므로 반드시 풀어 준다.
+  let payload;
+  try {
+    const res = await fetch("/api/analyze", {
+      method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
+    });
+    payload = await res.json();
+    if(!res.ok){ throw new Error(payload.detail || res.statusText); }
+  } catch(e){
+    log("!! 분석을 시작하지 못했습니다 — " + (e.message || e));
+    Q("#go").disabled = false;
+    hideProgress();
+    return;
+  }
+  const {job_id} = payload;
+
+  let shown = 0;
+  const timer = setInterval(async () => {
+    let j;
+    try { j = await (await fetch(`/api/job/${job_id}`)).json(); }
+    catch(e){
+      clearInterval(timer);
+      log("!! 서버와 연결이 끊겼습니다. 창을 닫지 말고 run.bat 이 살아 있는지 보세요.");
+      Q("#go").disabled = false;
+      hideProgress();
+      return;
+    }
+    j.log.slice(shown).forEach(l => log(l.startsWith("──") ? l.slice(3) : l, l.startsWith("──")));
+    shown = j.log.length;
+    showProgress(j.progress, j.phase);
+    if(j.status !== "running"){
+      clearInterval(timer);
+      Q("#go").disabled = false;
+      if(j.status === "done"){
+        clearArea();          // 그려 둔 범위는 여기서 반드시 비운다
+        Q("#nm").value = "";  // 이름도 비운다. 남아 있으면 다음 분석이 같은 폴더를 덮어쓴다
+        // 폴더명이 입력값과 다를 수 있으므로 목록에 실제로 있는 이름을 고른다
+        const b = await refreshSites();
+        const list = b.sites || [];
+        const target = list.includes(j.site) ? j.site : (b.last || list[0] || "");
+        Q("#sites").value = target;
+        loadSite(target);
+      }
+    }
+  }, 900);
+}
+
+/** 서버에 키가 있나 / 내가 넣었나에 따라 안내를 바꾼다. */
+function renderKeyState(server){
+  const mine = !!(myKeys.vworld || myKeys.data);
+  const has = server || {};
+  Q("#k-vworld").value = myKeys.vworld || "";
+  Q("#k-domain").value = myKeys.domain || "";
+  Q("#k-data").value   = myKeys.data   || "";
+  // 빈 칸인데 「서버 키 사용 중」이면 넣어야 하는 줄 안다. 왜 비어 있는지 적어 준다.
+  if(mine){
+    Q("#keystate").innerHTML = `<b style="color:var(--sel)">내 키 사용 중</b>`;
+    Q("#keywhy").innerHTML = `이 브라우저에 넣어둔 키로 돌고 있습니다.
+      <b>「지우기」</b> 를 누르면 서버 키로 돌아갑니다.`;
+  } else if(has.vworld || has.ledger){
+    Q("#keystate").textContent = "서버 키 사용 중";
+    Q("#keywhy").innerHTML = `서버의 <code>.env</code> 에 이미 키가 있어
+      <b>넣지 않아도 됩니다.</b> 빈 칸으로 두면 그대로 씁니다.<br>
+      남의 서버에 들어와 있고 <b>내 하루 한도(1,000건)</b> 로 쓰고 싶을 때만 넣으세요.`;
+  } else {
+    Q("#keystate").innerHTML = `<b style="color:#e0b088">키가 없습니다</b>`;
+    Q("#keywhy").innerHTML = `서버에도 키가 없습니다. <b>넣어야 분석이 됩니다.</b>`;
+    document.getElementById("keysec").classList.remove("folded");  // 접혀 있어도 펴 준다
+  }
+}
+
+async function refreshSites(){
+  const b = await (await fetch("/api/bootstrap")).json();
+  KEY = b.vworld_key;
+  renderKeyState(b.server_keys);
+  Q("#sites").innerHTML = `<option value="">— 선택 —</option>` +
+      b.sites.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  renderVersion(b.version);
+  return b;
+}
+
+// ─────────────────────────────────────────────────── 버전 / 업데이트
+function renderVersion(v){
+  if(!v) return;
+  Q("#ver").innerHTML = v.commit
+    ? `버전 <b>${esc(v.commit)}</b> · ${esc(v.date)}`
+    : `<b>버전 확인 불가</b>`;
+  Q("#ver").title = v.subject || v.note || "";
+  if(v.note){
+    Q("#vernote").style.display = "block";
+    Q("#vernote").textContent = v.note;
+    Q("#vercheck").style.display = "none";
+  }
+}
+
+async function checkUpdate(){
+  const btn = Q("#vercheck"), note = Q("#vernote");
+  btn.disabled = true; btn.textContent = "확인 중…";
+  note.style.display = "block"; note.textContent = "원격 저장소를 확인하고 있습니다…";
+  try{
+    const u = await (await fetch("/api/update/check")).json();
+    if(u.reason){ note.textContent = u.reason; return; }
+    if(!u.available){
+      note.innerHTML = "<b>최신 버전입니다.</b>";
+      Q("#ver").classList.remove("stale");
+      return;
+    }
+    Q("#ver").classList.add("stale");
+    note.innerHTML = `<b>새 버전 ${u.behind}건</b><br>` +
+      u.changes.map(c => "· " + esc(c.replace(/^\w+\s/, ""))).join("<br>") +
+      `<br><br><button class="ghost tiny" id="verapply">지금 받기</button>`;
+    Q("#verapply").onclick = applyUpdate;
+  } catch(e){
+    // TypeError 는 HTTP 오류가 아니라 **연결 자체가 안 된 것**이다.
+    // 서버 창이 닫혔거나 다시 켜지는 중일 때가 대부분이라, 그렇게 말해 준다.
+    let alive = false;
+    try { alive = (await fetch("/api/bootstrap", {cache:"no-store"})).ok; } catch(_){}
+    note.innerHTML = alive
+      ? `확인하지 못했습니다 — ${esc(e.message || e)}<br>
+         <span class="dim">인터넷은 되는데 깃허브에 못 닿는 경우가 많습니다.</span>`
+      : `<b>서버에 닿지 못했습니다.</b><br>
+         <span class="dim">사이트맵 창(검은 명령창)이 닫혔거나 다시 켜지는 중입니다.
+         run.bat 을 다시 실행한 뒤 이 화면을 새로고침하세요.</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "업데이트 확인";
+  }
+}
+
+async function applyUpdate(){
+  const note = Q("#vernote");
+  note.innerHTML = "받는 중…";
+  const r = await fetch("/api/update/apply", {method:"POST"});
+  const j = await r.json();
+  if(!r.ok){ note.innerHTML = "<b>실패</b><br>" + esc(j.detail || "").replace(/\n/g, "<br>"); return; }
+  note.innerHTML = `<b>${esc(j.message)}</b>` +
+    (j.restart_required ? `<br>${esc(j.before)} → ${esc(j.after)}` : "");
+}
+
+
+// ─────────────────────────────────────────────── 섹션 접기/펼치기
+function initFold(){
+  let saved = {};
+  try { saved = JSON.parse(LS.get("foldState", "{}")); } catch(e){ saved = {}; }
+
+  document.querySelectorAll(".sec").forEach((sec, i) => {
+    const h2 = sec.querySelector(":scope > h2");
+    if(!h2) return;
+    const key = sec.id || ("sec" + i);
+    if(saved[key] && !STAGE_SECS.includes(key)) sec.classList.add("folded");
+    h2.addEventListener("click", () => {
+      sec.classList.toggle("folded");
+      if(!STAGE_SECS.includes(key)){          // 단계 섹션은 흐름이 정한다
+        saved[key] = sec.classList.contains("folded");
+        LS.set("foldState", JSON.stringify(saved));
+      }
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────── 시작
+(async () => {
+  const b = await refreshSites();
+  initMap();
+  initFold();
+  // 탭이 제목줄 바로 밑에 서게 실제 높이를 재어 넘긴다.
+  //
+  // 창 크기가 바뀔 때만 재면 안 된다. 제목줄 높이는 그 밖에도 바뀐다 —
+  // 패널 폭을 끌어 좁히면 제목이 두 줄이 되고, 탭을 옮기면 제목 글이 통째로
+  // 바뀌며, 프리셋 번호칸도 탭마다 나타났다 사라진다. 그때 이 값이 옛것으로
+  // 남아 있으면 붙박이 탭이 제목을 덮거나 빈 틈이 생겨, 스크롤이 어긋나 보인다.
+  // 높이 자체를 지켜보면 무엇 때문에 바뀌든 따라간다.
+  const titlebar = document.querySelector(".titlebar");
+  const setTitleH = () => document.documentElement.style.setProperty(
+    "--title-h", titlebar.offsetHeight + "px");
+  setTitleH();
+  if(window.ResizeObserver) new ResizeObserver(setTitleH).observe(titlebar);
+  else window.addEventListener("resize", setTitleH);   // 아주 옛 브라우저용
+  initSideResize();
+  initAddress();
+  Q("#go").onclick = analyze;
+  Q("#a-bunji").onkeydown = e => { if(e.key === "Enter") analyze(); };
+  Q("#sites").onchange = e => loadSite(e.target.value);
+  // 최상위 탭 — 지도와 다이어그램은 같은 대상지를 공유한다
+  document.querySelectorAll(".vtab").forEach(t => t.onclick = () => setView(t.dataset.view));
+  document.querySelectorAll(".stab").forEach(t => t.onclick = () => setSub(t.dataset.sub));
+  bindDiagram();
+  bindPlan2();
+
+  SITE_PRESETS.bind();     // 담기·주고받기 단추는 presets.js 가 붙인다
+
+  Q("#k-save").onclick = async () => {
+    myKeys = { vworld: Q("#k-vworld").value.trim(),
+               domain: Q("#k-domain").value.trim(),
+               data:   Q("#k-data").value.trim() };
+    LS.set(KEYS, JSON.stringify(myKeys));
+    log("인증키를 저장했습니다 — 이 브라우저에만 남습니다.", true);
+    const b = await refreshSites();          // 배경지도 키도 새로 받는다
+    if(b.vworld_key !== KEY || true) location.reload();
+  };
+  Q("#k-clear").onclick = () => {
+    myKeys = {}; LS.del(KEYS);
+    log("인증키를 지웠습니다. 서버 키로 돌아갑니다.", true);
+    location.reload();
+  };
+
+  bindRatioDrop("a-ratio", "drawarea", "area");
+  bindRatioDrop("ps-ratio", "ps-rect", "site");
+  bindRatioDrop("ds-ratio", "boxsel", "select");
+  bindRatioDrop("ex-ratio", "ex-rect", "exrect");
+  Q("#ex-poly").onclick  = () => { if(boxMode !== "expoly") exClear();
+                                   setBoxMode(boxMode === "expoly" ? null : "expoly"); };
+  Q("#ex-undo").onclick  = () => { exPts.pop(); exRedraw(); };
+  Q("#ex-clear").onclick = () => exClear();
+  Q("#ex-go").onclick     = openExportModal;
+  Q("#exm-cancel").onclick = closeExportModal;
+  Q("#exm-ok").onclick     = runExport;
+  document.querySelectorAll("#exm-layers input").forEach(
+    i => i.addEventListener("change", drawExportPreview));
+  Q("#exmodal").onclick    = e => { if(e.target.id === "exmodal") closeExportModal(); };
+  document.querySelectorAll("#ex-scope button").forEach(
+    b => b.onclick = () => setExScope(b.dataset.scope));
+  Q("#ds-apply").onclick = () => {
+    // 확정했으면 그리기도 끝이다. 안 끄면 커서가 계속 범위를 잡아, 다음 클릭이
+    // 엉뚱하게 새 경계를 그리기 시작한다.
+    setBoxMode(null);
+    stopParcelPickModes();
+    const total = [...picked.values()].reduce((s,v) => s + (v.area || 0), 0);
+    foldSec("selbox", "ds-badge", `${picked.size}필지 · ${fmtArea(total)}`);
+    setExScope("design");
+    openStage("outbox");
+  };
+  Q("#dspoly").onclick = () => { if(boxMode !== "selpoly") dsClear();
+                                 setBoxMode(boxMode === "selpoly" ? null : "selpoly"); };
+  Q("#ds-add").onclick = () => setDsPickMode("add");
+  Q("#ds-sub").onclick = () => setDsPickMode("sub");
+  Q("#dsundo").onclick = () => { dsPts.pop(); dsRedraw(); };
+  Q("#drawpoly").onclick  = () => {
+    if(boxMode === "poly"){ setBoxMode(null); return; }
+    // 확정한 뒤 다시 들어오면 이어서 고칠 수 있게 한다. 새로 그리려면 「지우기」.
+    polyDoneFlag = false;
+    setBoxMode("poly");
+    polyRedraw();
+  };
+  Q("#polyundo").onclick  = () => { polyPts.pop(); polyRedraw(); };
+  Q("#polyclear").onclick = polyClear;
+  Q("#vercheck").onclick = checkUpdate;
+  Q("#clearsel").onclick = clearSelection;
+  Q("#ps-snap").onclick = psSnap;
+  Q("#ps-add").onclick = () => setPsPickMode("add");
+  Q("#ps-sub").onclick = () => setPsPickMode("sub");
+
+  Q("#ps-poly").onclick  = () => { if(boxMode !== "sitepoly") psClear(); setBoxMode(boxMode === "sitepoly" ? null : "sitepoly"); };
+  Q("#ps-undo").onclick  = () => { psPts.pop(); psRedraw(); };
+  Q("#ps-clear").onclick = () => { psClear(); };
+  Q("#ps-apply").onclick = psApply;
+  document.querySelectorAll(".tab").forEach(t => t.onclick = () => setMode(t.dataset.mode));
+
+  // 필터 — 값이 바뀔 때마다 즉시 반영
+  ["#f-jimok","#f-zone","#f-district","#f-cnt","#f-strct","#f-purps","#f-hide"]
+    .forEach(id => Q(id).onchange = applyFilter);
+  ["#f-amin","#f-amax","#f-ymin","#f-ymax","#f-fmin","#f-fmax"]
+    .forEach(id => Q(id).oninput = applyFilter);
+  Q("#f-reset-parcel").onclick = () => resetFields(PARCEL_FIELDS);
+  Q("#f-reset-bldg").onclick   = () => resetFields(BLDG_FIELDS);
+  Q("#f-pick").onclick = () => {
+    if(!matched) return;
+    let added = 0;
+    parcelLayer.eachLayer(l => {
+      const p = l.feature.properties;
+      if(matched.has(p.pnu) && !picked.has(p.pnu)){
+        picked.set(p.pnu, {jibun:p.jibun || p.pnu, area:p["필지면적_m2"] || 0});
+        added++;
+      }
+    });
+    parcelLayer.setStyle(f => parcelStyle(f));
+    renderPicked();
+    log(`필터 결과 ${added}필지 선택 (총 ${picked.size})`);
+  };
+
+
+
+  Q("#del").onclick = async () => {
+    const name = Q("#sites").value;
+    if(!name) return;
+    if(!confirm(`'${name}' 대상지를 삭제합니다.\n수집한 데이터·DB·도면이 모두 지워집니다. 계속할까요?`)) return;
+    const r = await fetch(DRAW.siteURL(name), {method:"DELETE"});
+    const j = await r.json();
+    if(!r.ok){ return log("!! " + (j.detail || r.statusText)); }
+    log(`'${j.deleted}' 삭제됨`, true);
+    if(current === name) clearSite();
+    await refreshSites();
+    if(j.sites.length){ Q("#sites").value = j.sites[0]; loadSite(j.sites[0]); }
+  };
+
+  // 새로 켤 때는 아무것도 고르지 않은 채로 시작한다.
+  // 예전에는 마지막 대상지를 자동으로 불러오면서 01 이 접히고 02 가 열려,
+  // 처음 켠 사람에게는 대상지 고르는 칸이 아예 안 보였다.
+  clearSite();
+  openStage("ctxsec");
+})();
+</script>
+</body>
+</html>

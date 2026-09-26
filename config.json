@@ -1,0 +1,85 @@
+{
+  "_note": "대상지는 CLI로 지정합니다:  python site.py \"서울 동대문구 제기동 988\" --radius 350",
+
+  "default_radius_m": 350,
+  "target_crs": "auto",
+  "_target_crs_note": "auto = 대상지 경도로 TM 원점을 자동 선택 (5185 서부/5186 중부/5187 동부/5188 동해). 특정 좌표계로 고정하려면 \"EPSG:5186\" 처럼 직접 적으세요.",
+
+  "crop_to_boundary": true,
+  "_crop_note": "대상지 경계(지도에서 그린 것, 없으면 수집범위)로 모든 객체를 잘라낸다. 잘린 자리가 경계선에 물려 닫힌 도형이 되므로 CAD에서 바로 면으로 쓸 수 있다. 끄려면 false 또는 to_dxf.py --no-crop.",
+
+  "origin": "center",
+  "_origin_note": "center = 수집범위 중심을 DXF 원점(0,0)으로 이동(권장). absolute = 실좌표 그대로.",
+
+  "text_height_m": 0.9,
+
+  "layers": [
+    {
+      "data_id": "LP_PA_CBND_BUBUN",
+      "name": "연속지적도",
+      "dxf_layer": "V-PARCEL",
+      "color": 8,
+      "label_field": "jibun",
+      "label_layer": "V-PARCEL-TXT",
+      "label_color": 9,
+      "clip": false,
+      "enabled": true
+    },
+    {
+      "data_id": "LT_C_SPBD",
+      "name": "건물(도로명주소)",
+      "dxf_layer": "V-BLDG",
+      "color": 3,
+      "label_field": "gro_flo_co",
+      "label_layer": "V-BLDG-TXT",
+      "label_color": 3,
+      "label_suffix": "F",
+      "clip": false,
+      "enabled": true
+    },
+    {
+      "data_id": "LT_L_SPRD",
+      "name": "도로(도로명주소)",
+      "dxf_layer": "V-ROAD",
+      "color": 4,
+      "label_field": null,
+      "clip": true,
+      "enabled": true
+    },
+    {
+      "data_id": "LT_C_UQ111",
+      "name": "용도지역(도시지역)",
+      "dxf_layer": "V-ZONE",
+      "color": 1,
+      "label_field": "uname",
+      "label_layer": "V-ZONE-TXT",
+      "label_color": 1,
+      "clip": true,
+      "enabled": true
+    },
+    {
+      "data_id": "LT_C_UPISUQ161",
+      "name": "지구단위계획구역",
+      "dxf_layer": "V-DISTRICT",
+      "color": 6,
+      "label_field": "dgm_nm",
+      "label_layer": "V-DISTRICT-TXT",
+      "label_color": 6,
+      "clip": true,
+      "enabled": true
+    },
+    {
+      "data_id": "LT_C_UPISUQ151",
+      "name": "도시계획도로",
+      "dxf_layer": "V-PLANROAD",
+      "color": 5,
+      "label_field": "dgm_nm",
+      "label_layer": "V-PLANROAD-TXT",
+      "label_color": 5,
+      "clip": true,
+      "enabled": true
+    }
+  ],
+
+  "_clip_note": "clip=true 인 레이어는 수집범위로 잘라냅니다. 용도지역·도로는 범위에 걸치기만 해도 도형 전체가 오기 때문입니다. 필지·건물은 면적이 틀어지므로 자르지 않습니다."
+}

@@ -1,0 +1,20 @@
+{
+  "name": "vworld-site-model-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build:render3d": "node scripts/build-render3d.mjs",
+    "check:build": "node scripts/build-render3d.mjs --check",
+    "build:rhino3d": "esbuild web/rhino3d.js --bundle --format=esm --minify --legal-comments=eof --external:node:* --external:ws --outfile=web/rhino3d.bundle.js",
+    "build": "npm run build:render3d && npm run build:rhino3d && node scripts/copy-rhino-wasm.mjs"
+  },
+  "dependencies": {
+    "3d-tiles-renderer": "0.5.2",
+    "rhino3dm": "8.32.2",
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
